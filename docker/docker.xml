@@ -1,0 +1,95 @@
+Buil 1 iamge va day len docker hub
++ Tạo tài khoản trên docker hub
++ Tạo 1 repository trên docker hub
++ Nếu không tạo trước thì khi đánh tag cho image thì sử dụng lệnh :
+docker tag my-custom-image:latest username/my-custom-image:latest
+docker push username/my-custom-image:latest
+
+Cach 1: lam thu cong:
+B1: tai image ve:
+ + docker pull ubuntu:20.04
+C:\Users\dell>docker pull ubuntu:20.04
+20.04: Pulling from library/ubuntu
+17d0386c2fff: Pull complete
+Digest: sha256:80ef4a44043dec4490506e6cc4289eeda2d106a70148b74b5ae91ee670e9c35d
+Status: Downloaded newer image for ubuntu:20.04
+docker.io/library/ubuntu:20.04
+
+What's Next?
+  View a summary of image vulnerabilities and recommendations → docker scout quickview ubuntu:20.04
+  
++ docker image ls -- > kiem tra xem da co image tai ve chua
+C:\Users\dell>docker image ls
+REPOSITORY   TAG       IMAGE ID       CREATED       SIZE
+ubuntu       20.04     3cff1c6ff37e   7 weeks ago   72.8MB
+B2: Chay image va vao cai dat cac packet can thiet
+C:\Users\dell>docker run -it 3cff1c6ff37e /bin/bash
+root@c1bf3bbbf970:/#
+B3: Sau khi da cai dat cac packet xong thi nhấn tổ hợp phím Ctrl+P+Q để thoát ra.
+B4: Kiểm tra container đang chạy
+docker ps -a
+CONTAINER ID   IMAGE          COMMAND       CREATED          STATUS          PORTS     NAMES
+c1bf3bbbf970   3cff1c6ff37e   "/bin/bash"   17 minutes ago   Up 17 minutes             practical_jones
+
+B5: tạo (lưu)image mới tư container trên.
++ docker commit c1bf3bbbf970 ubuntu:v1.0
+
+C:\Users\dell>docker commit c1bf3bbbf970 ubuntu:v1.0
+sha256:771a6f8516659601851b1fe10a74ffbe8f9e65fd470b5c5331df66da6db457fe
+
+B6: kiểm tra image vừa tạo : 
++ docker image ls
+C:\Users\dell>docker image ls
+REPOSITORY   TAG       IMAGE ID       CREATED          SIZE
+ubuntu       v1.0      771a6f851665   16 seconds ago   359MB
+ubuntu       20.04     3cff1c6ff37e   7 weeks ago      72.8MB
+
+B7: Đánh tag cho image vừa tạo với Repository đã tạo trên docker hub.
++ docker tag 771a6f851665 phamtu/ubuntu-tupt:v1.0
+C:\Users\dell>docker tag 771a6f851665 phamtu/ubuntu-tupt:v1.0
+
+B8: Đẩy lên repository trên docker hub.
++ docker push phamtu/ubuntu-tupt:v1.0.
+
+C:\Users\dell>docker push phamtu/ubuntu-tupt:v1.0
+The push refers to repository [docker.io/phamtu/ubuntu-tupt]
+644174e0dac0: Pushed
+5faf9c0a9efe: Mounted from library/ubuntu
+v1.0: digest: sha256:a740456c900b72b8b6ec93e5a245027514e5816b3d69548875996081f5a477e5 size: 742
+
+
+
+### Tao 1 docker file:
+https://docs.docker.com/get-started/02_our_app/
+
+ context :
+ 
+FROM ubuntu:20.04
+
+# setup and install package
+CMD ["/bin/sleep", "3650d"] ---> cung co the su dung ENTRYPOINT thay cho CMD
+RUN apt-get update && apt-get install -y inetutils-ping telnet wget vim curl
+
+# setup Helm
+RUN apt-get install -y gpg
+RUN curl https://baltocdn.com/helm/signing.asc | gpg --dearmor | tee /usr/share/keyrings/helm.gpg > /dev/null
+RUN apt-get install -y apt-transport-https
+RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/helm.gpg] https://baltocdn.com/helm/stable/debian/ all main" | tee /etc/apt/sources.list.d/helm-stable-debian.list
+RUN apt-get update
+RUN apt-get install -y helm
+RUN helm version
+
+# setup kubectl
+RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+RUN curl -LO "https://dl.k8s.io/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl.sha256"
+RUN echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+RUN install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+RUN kubectl version --client
+
+# setup kubectl
+RUN mkdir -p ~/.kube
+RUN touch ~/.kube/config
+
+docker build -t ubuntu-cmd .
+docker tag ff346bdf9a84 phamtu/ubuntu-tupt:v1.3
+docker push phamtu/ubuntu-tupt:v1.3
