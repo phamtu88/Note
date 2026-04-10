@@ -1,0 +1,8 @@
+# Chặn tất cả các file và thư mục
+*
+# Ngoại trừ thư mục oracle
+!oracle/
+!oracle/**
+# Ngoại trừ chính file .gitignore này
+!.gitignore
+!huong_dan_git_sync.md
