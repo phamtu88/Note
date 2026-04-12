@@ -91,3 +91,12 @@ Kết quả phải hiển thị owner là `grid` và group là `asmadmin`.
 > Khi cài đặt Grid Infrastructure (ở bước sau), tại màn hình chọn Disk, bạn phải thay đổi **Disk Discovery Path** thành `/dev/oracleasm/*` thì bộ cài mới nhìn thấy các ổ đĩa này.
 
 Bây giờ bạn đã sẵn sàng để tiến hành cài đặt phần mềm Grid Infrastructure!
+
+---
+
+## 5. Hiểu sâu hơn về bản chất của UDEV Rules trong môi trường Thực tế
+
+Sẽ có lúc bạn thắc mắc: *"Tại sao phải hì hục dò UUID rồi tạo file rule ảo như vậy? Chọn thẳng /dev/sdb lúc cài Grid là xong mà?"*. UDEV sinh ra để chống lại 2 tính năng thảm họa của Linux:
+
+1. **Chống lỗi "nhảy múa" Tên ổ đĩa (Device Naming Rotation):** Trên Linux, tên thiết bị `/dev/sdb`, `/dev/sdc` không hề cố định. Khi máy được Reboot hoặc cắm thêm USB/Card mạng, thứ tự nhận cổng SCSI thay đổi và con `/dev/sdb` (đang lưu DATA) có thể bị đổi tên thành `/dev/sde`. Cắm Grid vào sẽ lập tức bị sập. UDEV quét số UUID phần cứng duy nhất đổ khuôn cố định. Dù thiết bị có đổi tên gốc thành `sdz`, cái cổng ảo`/dev/oracleasm/asm_data1` vẫn luôn ghim đúng vào cái ruột UUID đó.
+2. **Chống cưỡng chế Khởi tạo Quyền (Permissions Revert):** Ổ đĩa ASM bắt buộc phải thuộc quyền user **`grid`**. Nhưng nếu bạn gõ lệnh `chown` bằng tay thì Linux sẽ làm gì? Trong khoảnh khắc máy tắt và Boot lên lần nữa, Linux tự động tước lại mọi quyền hạn của tất cả cổng `/dev/` và trả chủ sở hữu về tay **`root`**. Bằng việc khai báo OWNER/GROUP trong UDEV Rules, bạn cài mã vào sâu trong nhân hệ thống, cưỡng ép Linux nạp quyền đó tự động trong giây phút máy tính vừa khởi động.
