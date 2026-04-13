@@ -55,22 +55,53 @@ scheduler.conf             Dec 28, 2023 06:54 UTC   79d             ca          
 
 ---
 
-### Bước 2: Backup toàn bộ thư mục `/etc/kubernetes/`
+### Bước 2: Backup trước khi thay đổi
+
+> **Tại sao phải backup?**
+> Phòng trường hợp renew cert thất bại, có thể rollback bằng cách copy ngược lại.
+
+Chọn **một trong hai cách** dưới đây:
+
+#### Cách 1: Backup toàn bộ thư mục `/etc/kubernetes/` (✅ Khuyến nghị)
+
+Đơn giản, nhanh, đảm bảo không bỏ sót file nào.
 
 ```bash
 mkdir -p /opt/kubernetes
 cp -r /etc/kubernetes/* /opt/kubernetes/
 ```
 
-**Kiểm tra backup:**
+> Lệnh `cp -r` sẽ copy hết tất cả file và thư mục con (bao gồm `pki/`, `ssl/`, `manifests/`,...).
+
+#### Cách 2: Backup chỉ các file liên quan đến cert
+
+Chỉ backup đúng những file cần thiết cho việc rollback cert, phù hợp khi muốn tiết kiệm dung lượng hoặc cần tách biệt rõ ràng.
+
+```bash
+mkdir -p /opt/kubernetes
+cp -R /etc/kubernetes/ssl /opt/kubernetes/ssl
+cp -R /etc/kubernetes/pki /opt/kubernetes/pki
+cp /etc/kubernetes/admin.conf /opt/kubernetes/admin.conf
+cp /etc/kubernetes/controller-manager.conf /opt/kubernetes/controller-manager.conf
+cp /etc/kubernetes/kubelet.conf /opt/kubernetes/kubelet.conf
+cp /etc/kubernetes/scheduler.conf /opt/kubernetes/scheduler.conf
+```
+
+| File/Thư mục | Nội dung |
+|---|---|
+| `pki/` hoặc `ssl/` | Chứa các file certificate và private key |
+| `admin.conf` | Cert của admin user |
+| `controller-manager.conf` | Cert của Controller Manager |
+| `kubelet.conf` | Cert của Kubelet |
+| `scheduler.conf` | Cert của Scheduler |
+
+> **Lưu ý:** Cách này **KHÔNG backup** thư mục `manifests/` (chứa manifest của static pod) vì không liên quan đến cert.
+
+#### Kiểm tra backup
 
 ```bash
 ls -la /opt/kubernetes/
 ```
-
-> **Tại sao backup?**
-> - Phòng trường hợp renew cert thất bại, có thể rollback bằng cách copy ngược lại.
-> - Lệnh `cp -r` sẽ copy hết tất cả file và thư mục con (bao gồm `pki/`, `ssl/`, `manifests/`,...).
 
 ---
 
