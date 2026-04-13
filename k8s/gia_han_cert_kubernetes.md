@@ -131,15 +131,34 @@ certificate embedded in the kubeconfig file for the scheduler to use renewed
 
 ### Bước 4: Cập nhật kubeconfig cho user hiện tại
 
+**Trước tiên**, kiểm tra xem biến `KUBECONFIG` trên hệ thống đang trỏ tới đâu:
+
+```bash
+echo $KUBECONFIG
+```
+
+| Kết quả | Ý nghĩa | Hành động |
+|---|---|---|
+| `/etc/kubernetes/admin.conf` | `kubectl` đọc **trực tiếp** từ file gốc `admin.conf` | ✅ **Bỏ qua Bước 4** — renew xong là cert tự cập nhật |
+| *(trống / không có gì)* | `kubectl` đọc từ `$HOME/.kube/config` (file copy) | ⚠️ **Bắt buộc thực hiện Bước 4** bên dưới |
+
+> **Mẹo kiểm tra thêm:**
+> ```bash
+> # Xem biến KUBECONFIG có được đặt trong .bashrc không:
+> cat ~/.bashrc | grep KUBECONFIG
+> ```
+
+**Nếu cần thực hiện**, chạy lệnh sau để copy cert mới sang kubeconfig:
+
 ```bash
 cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
 chown $(id -u):$(id -g) $HOME/.kube/config
 ```
 
 > **Tại sao cần bước này?**
-> - File `$HOME/.kube/config` là bản copy của `admin.conf`.
+> - File `$HOME/.kube/config` là **bản copy** của `admin.conf`.
 > - Sau khi renew, cert trong `admin.conf` đã thay đổi nhưng `$HOME/.kube/config` vẫn chứa cert cũ.
-> - Nếu bỏ qua bước này, lệnh `kubectl` sẽ báo lỗi xác thực.
+> - Nếu bỏ qua, lệnh `kubectl` sẽ báo lỗi: `error: You must be logged in to the server (Unauthorized)`.
 
 ---
 
