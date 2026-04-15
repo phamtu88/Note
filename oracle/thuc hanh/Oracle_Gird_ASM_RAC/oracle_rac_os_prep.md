@@ -66,25 +66,24 @@ chmod -R 775 /u01
 
 ---
 
-## 4. Cấu hình SSH Passwordless cho User Grid (Cực kỳ quan trọng)
+## 4. Cấu hình SSH Passwordless cho User Grid & Oracle (Cực kỳ quan trọng)
 
-Bộ cài Oracle RAC cần điều khiển các node từ xa mà không hỏi mật khẩu. Chúng ta sẽ cấu hình cho user `grid`.
+Bộ cài Oracle RAC cần các node có thể "nói chuyện" với nhau mà không hỏi mật khẩu. Chúng ta cấu hình cho **cả 2 user** `grid` và `oracle`.
 
 > [!WARNING]
-> Mẹo tránh các lỗi phổ biến ở bước này:
-> - **Khi sinh chìa khóa (`ssh-keygen`)**: Nhấn <Enter> liên tục 3 lần, **tuyệt đối không nhập bất kỳ ký tự nào** làm passphrase để tạo khóa rỗng (Passwordless).
-> - **Lỗi `Host key verification failed`**: Khi kết nối lần đầu, hệ thống hỏi `Are you sure you want to continue connecting (yes/no)?`, bạn **BẮT BUỘC** phải gõ đủ chữ `yes`. Nếu chỉ nhấn <Enter> hoặc gõ `y` sẽ sinh ra lỗi này.
-> - **Lỗi `Permission denied`**: Xuất hiện do bạn nhập sai mật khẩu, hoặc do bạn quên chạy lệnh `passwd grid` để khởi tạo mật khẩu bên máy đích.
+> Mẹo tránh lỗi:
+> - **Chìa khóa (`ssh-keygen`)**: Nhấn <Enter> liên tục 3 lần, không nhập passphrase.
+> - **Lỗi `Host key verification failed`**: Phải gõ đủ chữ `yes` khi được hỏi lần đầu.
 
-**Bước 1: Trên Node 1 (User grid)**
+### A. Cấu hình cho User `grid`
+Thực hiện trên **Node 1**:
 ```bash
 su - grid
-ssh-keygen -t rsa   # Nhấn Enter liên tục cho đến khi xong
+ssh-keygen -t rsa
 ssh-copy-id oracle1
 ssh-copy-id oracle2
 ```
-
-**Bước 2: Trên Node 2 (User grid)**
+Thực hiện trên **Node 2**:
 ```bash
 su - grid
 ssh-keygen -t rsa
@@ -92,12 +91,23 @@ ssh-copy-id oracle1
 ssh-copy-id oracle2
 ```
 
-**Bước 3: Kiểm tra (Thực hiện trên cả 2 node)**
+### B. Cấu hình cho User `oracle`
+Thực hiện trên **Node 1**:
 ```bash
-# Phải login qua lại được mà không hỏi mật khẩu
-ssh oracle1 date
-ssh oracle2 date
+su - oracle
+ssh-keygen -t rsa
+ssh-copy-id oracle1
+ssh-copy-id oracle2
 ```
+Thực hiện trên **Node 2**:
+```bash
+su - oracle
+ssh-keygen -t rsa
+ssh-copy-id oracle1
+ssh-copy-id oracle2
+```
+
+**Kiểm tra:** Trên mỗi node, dùng cả 2 user để chạy thử lệnh `ssh <tên_node> date`. Nếu không hỏi mật khẩu là thành công.
 
 ---
 
