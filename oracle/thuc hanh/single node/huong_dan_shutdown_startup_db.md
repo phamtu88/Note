@@ -6,7 +6,7 @@ Tài liệu này cung cấp các bước chính xác để tắt và bật cơ s
 
 Thực hiện theo thứ tự để tránh lỗi dữ liệu hoặc yêu cầu recovery sau này.
 
-1. **Chuyển sang user `oracle`**:ksb
+1. **Chuyển sang user `oracle`**
    ```bash
    su - oracle
    ```
