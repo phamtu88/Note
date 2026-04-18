@@ -1,4 +1,6 @@
-# Các bước xử lý sau khi Clone OS (Tránh xung đột cho Oracle RAC)
+# [TÀI LIỆU CŨ] - Đã hợp nhất vào [02_OS_Preparation_and_Cloning.md](file:///d:/DB/setup/oracle/thuc%20hanh/Oracle_Gird_ASM_RAC/02_OS_Preparation_and_Cloning.md)
+
+# Hướng dẫn Cấu hình sau khi Clone Server (OS Clean) cho Oracle RAC
 
 Tài liệu này tập trung vào việc **xử lý định danh** để biến Node 2 thành bản sao không gây xung đột với Node 1. Các bước cấu hình IP, VIP, SCAN chi tiết vui lòng xem tại tài liệu mạng.
 

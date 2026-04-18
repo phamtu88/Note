@@ -1,3 +1,5 @@
+# [TÀI LIỆU CŨ] - Vui lòng xem lộ trình mới tại [00_RAC_Setup_Roadmap.md](file:///d:/DB/setup/oracle/thuc%20hanh/Oracle_Gird_ASM_RAC/00_RAC_Setup_Roadmap.md)
+
 # Hướng dẫn Cấu hình VMware Workstation để cài đặt Oracle Grid Infrastructure
 
 > [!WARNING]
@@ -78,69 +80,15 @@ scsi1.sharedBus = "virtual"
 
 ---
 
-## Phần 3: Cấu hình trên OS (Linux) để Oracle Grid nhận diện và sử dụng Disk
-
-Việc thiết lập Share trên VMWare chỉ giúp 2 máy ảo Linux cùng nhìn thấy thiết bị (`/dev/sdb`, `/dev/sdc`...). Nhưng để cài Grid, ổ đĩa cần thuộc quyền của user `grid` và group `asmadmin`. Bạn cần dùng `udev` rules.
-
-### Bước 1: Tìm ID của ổ cứng (Thực hiện trên Node 1)
-Sau khi bật máy lên, mở terminal bằng root:
-```bash
-/usr/lib/udev/scsi_id -g -u -d /dev/sdb
-/usr/lib/udev/scsi_id -g -u -d /dev/sdc
-/usr/lib/udev/scsi_id -g -u -d /dev/sdd
-```
-*Kết quả sẽ trả về một chuỗi UUID (VD: `36000c29b4e78a4b4cc8c5e62c8e1bcd1`). Hãy lưu các chuỗi này lại.*
-
-
-### Bước 2: Viết rules cho udev
-Tạo một file rule mới:
-```bash
-vi /etc/udev/rules.d/99-oracle-asmdevices.rules
-```
-
-Dán cấu hình sau (thay thế UUID thực tế bạn vừa lấy được), mỗi thiết bị là một dòng:
-
-```properties
-KERNEL=="sd*", SUBSYSTEM=="block", PROGRAM=="/usr/lib/udev/scsi_id -g -u -d /dev/$parent", RESULT=="<UUID_TỪ_BƯỚC_1>", SYMLINK+="oracleasm/ocr1", OWNER="grid", GROUP="asmadmin", MODE="0660"
-
-KERNEL=="sd*", SUBSYSTEM=="block", PROGRAM=="/usr/lib/udev/scsi_id -g -u -d /dev/$parent", RESULT=="<UUID_TỪ_BƯỚC_1>", SYMLINK+="oracleasm/data1", OWNER="grid", GROUP="asmadmin", MODE="0660"
-
-KERNEL=="sd*", SUBSYSTEM=="block", PROGRAM=="/usr/lib/udev/scsi_id -g -u -d /dev/$parent", RESULT=="<UUID_TỪ_BƯỚC_1>", SYMLINK+="oracleasm/fra1", OWNER="grid", GROUP="asmadmin", MODE="0660"
-```
-
-
-### Bước 3: Load lại udev rules
-Chạy các lệnh sau trên Server (root) để OS nhận diện cấu hình mới:
-```bash
-/sbin/udevadm control --reload-rules
-/sbin/udevadm trigger --type=devices --action=change
-```
-
-### Bước 4: Kiểm tra kết quả
-```bash
-ll /dev/oracleasm/*
-```
-Lúc này bạn sẽ nhìn thấy `/dev/oracleasm/ocr1`, `/dev/oracleasm/data1`, `/dev/oracleasm/fra1` được sinh ra, có màu vàng chữ nổi bật, và thuộc quyền sở hữu của `grid:asmadmin`.
-
-
-Bây giờ bạn đã sẵn sàng chạy bộ cài `gridSetup.sh`. Khi đến bước tạo Disk Groups, ở ô **Disk Discovery Path**, hãy điền `/dev/oracleasm/*` để nhận các đĩa này.
-
-> [!TIP]
-> Bạn nhớ thực hiện tương tự Bước 2 và Bước 3 trên Node 2 (với cùng nội dung rule udev giống hệt) để Node 2 cũng nhận được các alias `/dev/oracleasm/...` trước khi cài đặt Grid.
-
 ---
 
-## Phụ lục: Triển khai Storage trong Môi trường Thực tế (Production)
+## Bước tiếp theo (Rất quan trọng)
 
-Trong môi trường thực tế doanh nghiệp, việc chia sẻ ổ đĩa cho Oracle RAC **không** sử dụng file cấu hình `.vmx` như VMware Workstation mà sẽ dùng các thiết bị chuyên dụng:
+Sau khi bạn đã hoàn tất việc cấu hình ổ đĩa dùng chung trên VMware và sửa file `.vmx`, hệ thống của bạn đã có "phần cứng" chuẩn. Tuy nhiên, bạn **chưa thể** cấu hình UDEV Rules ngay lúc này.
 
-**1. Môi trường Máy chủ Vật lý (Bare Metal) kết nối SAN/NAS:**
-- **SAN Storage (Qua cáp quang FC):** Tủ đĩa (Dell EMC, NetApp, HP 3PAR) chia ra các cục đĩa ảo gọi là LUN. Quản trị viên thiết lập quyền (Zoning/Masking) ép 1 LUN này phát sóng đến đồng thời cả 2 máy chủ vật lý RAC thông qua Card quang HBA. Linux quét quang học sẽ nhận được `/dev/sdb`. Lúc này ta bỏ qua bài cấu hình VMware và chuyển thẳng sang đoạn viết UDEV Rules.
-- **NAS Storage (NFS):** Các máy chủ truy cập dùng chung 1 thư mục mạng thông qua giao thức mạng dNFS cực nhanh của Oracle. File nằm gọn trên thư mục mạng.
-- **iSCSI Storage:** Dùng 1 máy chủ vật lý thường làm điểm chia sẻ (Target). 2 Node RAC lên cấu hình (Initiator) để login lấy ổ đĩa dùng chung qua mạng IP (LAN).
+Bạn cần thực hiện theo trình tự sau:
 
-**2. Môi trường VMware ESXi (vSphere / vCenter):**
-VMware ESXi là hệ thống ảo hóa dành cho máy chủ. Cấu hình Share Disk trên ESXi đơn giản và chuẩn mực hơn Workstation rất nhiều với tính năng khóa **Multi-Writer**:
-- **Tạo ổ cứng:** Ổ cứng BẮT BUỘC phải quy hoạch định dạng ở mức **Thick Provision Eager Zeroed**.
-- **Chỉnh SCSI Controller:** Bộ điều khiển SCSI gánh các ổ chia sẻ phải được đổi thuộc tính *SCSI Bus Sharing* từ `None` sang **Physical** (nếu 2 VM RAC nằm trên 2 máy chủ ESXi khác nhau) hoặc **Virtual** (nếu 2 VM báo nằm chung 1 Host ESXi).
-- **Cấu hình Multi-Writer flag:** Thay vì hì hục sửa file `.vmx` chống lock disk, trên giao diện vCenter xịn, bạn chỉ cần mở cài đặt ổ cứng, mụục *Sharing*, chọn cấu hình **Multi-writer**. ESXi sẽ chủ động bỏ khóa file và ném thẳng công việc điều phối I/O về cho phần mềm Oracle ASM tự phân xử.
+1.  **Tiếp tục với Bước 2:** Cấu hình Hệ điều hành, tạo người dùng `grid` và `oracle` tại tài liệu [oracle_rac_os_prep.md](file:///d:/DB/setup/oracle/thuc%20hanh/Oracle_Gird_ASM_RAC/oracle_rac_os_prep.md). (Chỉ khi có người dùng `grid`, bước cấu hình ổ đĩa mới có ý nghĩa).
+2.  **Quay lại Bước 3:** Sau khi đã có người dùng, hãy thực hiện cấu hình **UDEV Rules** để gán quyền cho ổ đĩa tại tài liệu chuyên biệt: [oracle_rac_udev_asm.md](file:///d:/DB/setup/oracle/thuc%20hanh/Oracle_Gird_ASM_RAC/oracle_rac_udev_asm.md).
+
+---

@@ -1,3 +1,5 @@
+# [TÀI LIỆU CŨ] - Đã hợp nhất vào [02_OS_Preparation_and_Cloning.md](file:///d:/DB/setup/oracle/thuc%20hanh/Oracle_Gird_ASM_RAC/02_OS_Preparation_and_Cloning.md)
+
 # Bước 2: Chuẩn bị Hệ điều hành cho Oracle RAC (Thực hiện trên 2 Nodes)
 
 Sau khi cấu hình xong mạng và ổ đĩa dùng chung trên VMware, bạn cần chuẩn bị môi trường OS đồng bộ trên cả 2 node để sẵn sàng cài đặt Grid Infrastructure.
