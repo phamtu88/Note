@@ -455,5 +455,17 @@ $ORACLE_HOME/runInstaller -silent -force -responseFile /tmp/db.rsp
   - `oracle.install.db.config.starterdb.password.ALL`: Mật khẩu mới.
   - `ORACLE_HOME` / `ORACLE_BASE`: Nếu bạn đổi thư mục cài đặt.
 
+## 10. PHỤ LỤC: CÀI ĐẶT "SIÊU TỐC" BẰNG SCRIPT (AUTO SETUP)
+
+Để tối ưu hóa quá trình cài đặt cho các máy chủ mới, bạn có thể sử dụng 3 script đã được chuẩn bị sẵn trong thư mục `Scrip`.
+
+### Bước 1: Cấu hình OS (Quyền ROOT)
+Chọn 1 trong 2 tùy chọn tùy theo tình trạng mạng:
+- **Online:** `sh /d/DB/setup/oracle/thuc\ hanh/Scrip/1_setup_os_online.sh`
+- **Offline:** `sh /d/DB/setup/oracle/thuc\ hanh/Scrip/1_setup_os_offline.sh`
+
+### Bước 2: Cấu hình Môi trường (Quyền ROOT)
+- Chạy: `sh /d/DB/setup/oracle/thuc\ hanh/Scrip/2_setup_env_all.sh`
+
 ======================
 *(Biên soạn chi tiết hoàn chỉnh toàn phần cấu trúc Cài Đặt Oracle DB 19c Server Single).*
