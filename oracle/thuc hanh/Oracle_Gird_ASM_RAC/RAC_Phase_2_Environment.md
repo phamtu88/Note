@@ -102,15 +102,17 @@ passwd oracle
 Chúng ta quy hoạch tập trung vào thư mục `/u01`:
 ```bash
 # Tạo các thư mục Home cho Grid và Database
-mkdir -p /u01/app/19.3.0/grid   # GRID_HOME (Nơi giải nén bộ cài Grid)
-mkdir -p /u01/app/grid          # GRID_BASE
-mkdir -p /u01/app/oracle        # ORACLE_BASE
+mkdir -p /u01/app/19.3.0/grid               # GRID_HOME (Nơi giải nén bộ cài Grid)
+mkdir -p /u01/app/oracle/product/19.3.0/dbhome_1 # DB_HOME (Nơi giải nén bộ cài DB)
+mkdir -p /u01/app/grid                      # GRID_BASE
+mkdir -p /u01/app/oracle                    # ORACLE_BASE
 
 # Phân quyền chuẩn xác (Cực kỳ quan trọng)
 chown -R grid:oinstall /u01
 chown -R grid:oinstall /u01/app/19.3.0/grid
 chown -R grid:oinstall /u01/app/grid
 chown -R oracle:oinstall /u01/app/oracle
+chown -R oracle:oinstall /u01/app/oracle/product/19.3.0/dbhome_1
 chmod -R 775 /u01
 ```
 
@@ -130,6 +132,7 @@ Bộ cài Oracle RAC cần các node có thể "nói chuyện" với nhau mà kh
 ```bash
 su - grid
 ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa
+# Hoặc lệnh đơn giản (phải nhấn Enter 3 lần): ssh-keygen -t rsa
 ssh-copy-id oracle1
 ssh-copy-id oracle2
 ```
@@ -137,12 +140,30 @@ ssh-copy-id oracle2
 ```bash
 su - grid
 ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa
+# Hoặc lệnh đơn giản (phải nhấn Enter 3 lần): ssh-keygen -t rsa
 ssh-copy-id oracle1
 ssh-copy-id oracle2
 ```
 
 ### 4.2 Cấu hình cho User `oracle`
-Thực hiện tương tự các bước trên cho user `oracle` trên **cả 2 Node**.
+- **Trên Node 1:**
+```bash
+su - oracle
+# Lệnh "chắc chắn" (không hỏi lại):
+ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa
+# Hoặc lệnh đơn giản (phải nhấn Enter 3 lần): ssh-keygen -t rsa
+ssh-copy-id oracle1
+ssh-copy-id oracle2
+```
+- **Trên Node 2:**
+```bash
+su - oracle
+# Lệnh "chắc chắn" (không hỏi lại):
+ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa
+# Hoặc lệnh đơn giản (phải nhấn Enter 3 lần): ssh-keygen -t rsa
+ssh-copy-id oracle1
+ssh-copy-id oracle2
+```
 
 **Kiểm tra:** Trên mỗi node, dùng cả 2 user để chạy thử lệnh `ssh <tên_node> date`. Nếu không hỏi mật khẩu là thành công.
 
@@ -206,7 +227,7 @@ export PATH=$ORACLE_HOME/bin:$PATH
 export ORACLE_SID=orcl1
 export ORACLE_UNQNAME=orcl
 export ORACLE_BASE=/u01/app/oracle
-export ORACLE_HOME=$ORACLE_BASE/product/19.0.0/dbhome_1
+export ORACLE_HOME=$ORACLE_BASE/product/19.3.0/dbhome_1
 export PATH=$ORACLE_HOME/bin:$PATH
 ```
 
@@ -237,13 +258,75 @@ chronyc -a makestep
 chronyc sources -v
 ```
 
-## 8. Cấu hình UDEV Rules cho ASM
-Đây là bước cuối cùng để gán quyền ổ đĩa cho `grid:asmadmin`.
-1. Lấy UUID của đĩa: `/usr/lib/udev/scsi_id -g -u -d /dev/sdb`.
-2. Tạo file `/etc/udev/rules.d/99-oracle-asmdevices.rules`.
-3. Áp dụng: `udevadm control --reload-rules` và `udevadm trigger`.
-4. Kiểm tra: `ll /dev/oracleasm/*`.
+## 8. Cấu hình UDEV Rules cho ASM Shared Disks
+
+Trong Oracle RAC, các Node cần truy cập vào cùng một ổ đĩa vật lý. Để Grid Infrastructure nhận diện chính xác và ổn định các ổ đĩa này, chúng ta cần gán cho chúng các tên gợi nhớ (Alias) cố định và phân quyền sở hữu cho user `grid`.
+
+### 8.1 Tìm UUID của các ổ Shared Disks
+Thực hiện trên **Node 1** bằng quyền `root`.
+
+```bash
+# Liệt kê các ổ đĩa để xác định tên thiết bị (sdb, sdc, sdd...)
+lsblk
+
+# Chạy lệnh lấy UUID cho từng ổ (Ví dụ sdb là OCR)
+/usr/lib/udev/scsi_id -g -u -d /dev/sdb
+# Kết quả VD: 36000c29d009baba53549298586ea9a71
+
+/usr/lib/udev/scsi_id -g -u -d /dev/sdc
+# Kết quả VD: 36000c29f8f2b1d9c6c0e8a7d7f7e8a91
+
+/usr/lib/udev/scsi_id -g -u -d /dev/sdd
+# Kết quả VD: 36000c29a1b2c3d4e5f6a7b8c9d0e1f23
+```
+
+> [!TIP]
+> Hãy ghi lại các UUID này tương ứng với mục đích (OCR, DATA, FRA) để viết Rule ở bước sau.
+
+### 8.2 Tạo file UDEV Rules
+Tạo file mới trên **CẢ 2 NODES** bằng quyền `root`:
+```bash
+vi /etc/udev/rules.d/99-oracle-asmdevices.rules
+```
+
+Dán nội dung sau vào (Hãy thay các chuỗi `RESULT=="..."` bằng UUID thực tế của bạn):
+```properties
+# ASM_OCR disk
+KERNEL=="sd*", SUBSYSTEM=="block", PROGRAM=="/usr/lib/udev/scsi_id -g -u -d /dev/$name", RESULT=="36000c29d009baba53549298586ea9a71", SYMLINK+="oracleasm/asm_ocr1", OWNER="grid", GROUP="asmadmin", MODE="0660"
+
+# ASM_DATA disk
+KERNEL=="sd*", SUBSYSTEM=="block", PROGRAM=="/usr/lib/udev/scsi_id -g -u -d /dev/$name", RESULT=="36000c29f8f2b1d9c6c0e8a7d7f7e8a91", SYMLINK+="oracleasm/asm_data1", OWNER="grid", GROUP="asmadmin", MODE="0660"
+
+# ASM_FRA disk
+KERNEL=="sd*", SUBSYSTEM=="block", PROGRAM=="/usr/lib/udev/scsi_id -g -u -d /dev/$name", RESULT=="36000c29a1b2c3d4e5f6a7b8c9d0e1f23", SYMLINK+="oracleasm/asm_fra1", OWNER="grid", GROUP="asmadmin", MODE="0660"
+```
+
+### 8.3 Áp dụng Rule (Reload UDEV)
+Chạy các lệnh sau trên **CẢ 2 NODES** bằng quyền `root`:
+```bash
+/sbin/udevadm control --reload-rules
+/sbin/udevadm trigger --type=devices --action=change
+```
+
+### 8.4 Kiểm tra kết quả
+Nếu thành công, bạn sẽ thấy các đường dẫn ảo (Symlinks) xuất hiện với đúng quyền hạn:
+```bash
+ls -alt /dev/oracleasm/*
+```
+
+Kết quả mong đợi:
+```text
+lrwxrwxrwx 1 root root 6 Apr 15 10:36 /dev/oracleasm/asm_ocr1 -> ../sdb
+lrwxrwxrwx 1 root root 6 Apr 15 10:36 /dev/oracleasm/asm_data1 -> ../sdc
+lrwxrwxrwx 1 root root 6 Apr 15 10:36 /dev/oracleasm/asm_fra1 -> ../sdd
+```
+
+> [!CAUTION]
+> Khi cài đặt Grid Infrastructure (ở bước sau), tại màn hình chọn Disk, bạn phải thay đổi **Disk Discovery Path** thành `/dev/oracleasm/*` thì bộ cài mới nhìn thấy các ổ đĩa này.
 
 ---
-> [!NOTE]
-> Sau khi `ll /dev/oracleasm/*` hiện đúng quyền và giờ 2 máy đã khớp hoàn toàn, hãy chuyển sang **[Giai đoạn 3: Cài đặt](RAC_Phase_3_Installation.md)**.
+
+## 9. Tại sao phải cấu hình UDEV Rules?
+
+1. **Chống lỗi "nhảy múa" Tên ổ đĩa (Device Naming Rotation):** Trên Linux, tên thiết bị `/dev/sdb`, `/dev/sdc` không cố định. Sau khi Reboot, `/dev/sdb` có thể bị đổi thành `/dev/sde`. UDEV sử dụng UUID để "đóng băng" định danh ổ đĩa, đảm bảo `/dev/oracleasm/asm_data1` luôn trỏ đúng vào ổ DATA.
+2. **Cưỡng ép Phân quyền (Permissions Persistence):** Mặc định Linux sẽ trả quyền sở hữu các thiết bị `/dev/` về cho `root` sau mỗi lần khởi động. UDEV giúp gán lại quyền cho user `grid` một cách tự động và bền vững.

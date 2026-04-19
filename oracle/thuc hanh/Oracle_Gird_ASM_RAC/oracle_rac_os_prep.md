@@ -81,14 +81,18 @@ Bộ cài Oracle RAC cần các node có thể "nói chuyện" với nhau mà kh
 Thực hiện trên **Node 1**:
 ```bash
 su - grid
-ssh-keygen -t rsa
+# Lệnh "chắc chắn" (không hỏi lại):
+ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa
+# Hoặc lệnh đơn giản (phải nhấn Enter 3 lần): ssh-keygen -t rsa
 ssh-copy-id oracle1
 ssh-copy-id oracle2
 ```
 Thực hiện trên **Node 2**:
 ```bash
 su - grid
-ssh-keygen -t rsa
+# Lệnh "chắc chắn" (không hỏi lại):
+ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa
+# Hoặc lệnh đơn giản (phải nhấn Enter 3 lần): ssh-keygen -t rsa
 ssh-copy-id oracle1
 ssh-copy-id oracle2
 ```
@@ -97,14 +101,18 @@ ssh-copy-id oracle2
 Thực hiện trên **Node 1**:
 ```bash
 su - oracle
-ssh-keygen -t rsa
+# Lệnh "chắc chắn" (không hỏi lại):
+ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa
+# Hoặc lệnh đơn giản (phải nhấn Enter 3 lần): ssh-keygen -t rsa
 ssh-copy-id oracle1
 ssh-copy-id oracle2
 ```
 Thực hiện trên **Node 2**:
 ```bash
 su - oracle
-ssh-keygen -t rsa
+# Lệnh "chắc chắn" (không hỏi lại):
+ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa
+# Hoặc lệnh đơn giản (phải nhấn Enter 3 lần): ssh-keygen -t rsa
 ssh-copy-id oracle1
 ssh-copy-id oracle2
 ```
