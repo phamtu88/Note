@@ -244,7 +244,7 @@ export PATH=$ORACLE_HOME/bin:$PATH
 export ORACLE_SID=orcl2
 export ORACLE_UNQNAME=orcl
 export ORACLE_BASE=/u01/app/oracle
-export ORACLE_HOME=$ORACLE_BASE/product/19.0.0/dbhome_1
+export ORACLE_HOME=$ORACLE_BASE/product/19.3.0/dbhome_1
 export PATH=$ORACLE_HOME/bin:$PATH
 ```
 
