@@ -31,8 +31,11 @@ EOF
 
 **2. Cài đặt các gói thư viện cần thiết:**
 ```bash
-# Thay thế cho gói preinstall RPM
+# Lệnh cơ bản (nếu máy đã tắt hẳn các repo online)
 yum install -y binutils compat-libcap1 gcc gcc-c++ glibc glibc-devel ksh libaio libaio-devel libstdc++ libstdc++-devel make sysstat
+
+# Lệnh "chắc chắn" (ép buộc chỉ dùng LocalRepo, tránh lỗi nếu máy vẫn còn cắm NAT)
+yum install -y --disablerepo="*" --enablerepo="LocalRepo" binutils compat-libcap1 gcc gcc-c++ glibc glibc-devel ksh libaio libaio-devel libstdc++ libstdc++-devel make sysstat
 ```
 
 **3. Cấu hình tham số Kernel thủ công:**

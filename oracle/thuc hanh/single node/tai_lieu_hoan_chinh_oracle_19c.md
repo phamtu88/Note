@@ -158,7 +158,11 @@ EOF
 # EOF
 
 # Cập nhật và cài các gói cần thiết (thay thế cho pre-install rpm)
+# Cách 1: Lệnh cơ bản
 dnf install -y binutils compat-libcap1 gcc gcc-c++ glibc glibc-devel ksh libaio libaio-devel libstdc++ libstdc++-devel make sysstat
+
+# Cách 2: Lệnh "chắc chắn" (ép buộc chỉ cài từ Local Repository đã tạo ở trên)
+dnf install -y --disablerepo="*" --enablerepo="LocalRepo*" binutils compat-libcap1 gcc gcc-c++ glibc glibc-devel ksh libaio libaio-devel libstdc++ libstdc++-devel make sysstat
 ```
 
 #### 2. Cấu hình User và Tham số nhân thủ công
