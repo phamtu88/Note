@@ -335,5 +335,7 @@ Kết quả phải hiển thị owner là `grid` và group là `asmadmin`
 
 ## 9. Tại sao phải cấu hình UDEV Rules?
 
-1. **Chống lỗi "nhảy múa" Tên ổ đĩa (Device Naming Rotation):** Trên Linux, tên thiết bị `/dev/sdb`, `/dev/sdc` không cố định. Sau khi Reboot, `/dev/sdb` có thể bị đổi thành `/dev/sde`. UDEV sử dụng UUID để "đóng băng" định danh ổ đĩa, đảm bảo `/dev/oracleasm/asm_data1` luôn trỏ đúng vào ổ DATA.
-2. **Cưỡng ép Phân quyền (Permissions Persistence):** Mặc định Linux sẽ trả quyền sở hữu các thiết bị `/dev/` về cho `root` sau mỗi lần khởi động. UDEV giúp gán lại quyền cho user `grid` một cách tự động và bền vững.
+Sẽ có lúc bạn thắc mắc: *"Tại sao phải hì hục dò UUID rồi tạo file rule ảo như vậy? Chọn thẳng /dev/sdb lúc cài Grid là xong mà?"*. UDEV sinh ra để giải quyết 2 vấn đề lớn của Linux trong môi trường Enterprise:
+
+1. **Chống lỗi "nhảy múa" Tên ổ đĩa (Device Naming Rotation):** Trên Linux, tên thiết bị `/dev/sdb`, `/dev/sdc` không hề cố định. Khi máy được Reboot hoặc cắm thêm USB/Card mạng, thứ tự nhận cổng SCSI có thể thay đổi và ổ `/dev/sdb` (đang lưu DATA) có thể bị đổi tên thành `/dev/sde`. Nếu bộ cài Grid trỏ vào tên thiết bị này, hệ thống sẽ lập tức bị sập. UDEV quét số UUID phần cứng duy nhất để định danh cố định. Dù thiết bị có đổi tên gốc thành `sdz`, cái cổng ảo `/dev/oracleasm/asm_data1` vẫn luôn ghim đúng vào cái ruột UUID đó.
+2. **Chống cưỡng chế Khởi tạo Quyền (Permissions Persistence):** Ổ đĩa ASM bắt buộc phải thuộc quyền user **`grid`**. Nếu bạn gõ lệnh `chown` bằng tay, Linux sẽ tự động tước lại mọi quyền hạn và trả chủ sở hữu về tay **`root`** ngay khi máy khởi động lại. Bằng việc khai báo OWNER/GROUP trong UDEV Rules, bạn đã cài mã vào sâu trong nhân hệ thống, cưỡng ép Linux nạp đúng quyền sở hữu ngay từ giây phút máy tính vừa khởi động.
