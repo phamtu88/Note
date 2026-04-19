@@ -2,6 +2,9 @@
 
 Tài liệu này cung cấp các bước chính xác để tắt và bật cơ sở dữ liệu Oracle trên môi trường Single Node (đơn lẻ), đảm bảo an toàn dữ liệu.
 
+> [!IMPORTANT]  
+> Hướng dẫn này **CHỈ DÀNH CHO SINGLE NODE**. Nếu bạn đang dùng cụm RAC, hãy xem [Hướng dẫn Shutdown/Startup cho RAC](file:///d:/DB/setup/oracle/thuc%20hanh/Oracle_Gird_ASM_RAC/huong_dan_shutdown_startup_rac.md) để tránh lỗi hệ thống Clusterware.
+
 ## 1. Các bước Shutdown (Tắt Database sạch sẽ)
 
 Thực hiện theo thứ tự để tránh lỗi dữ liệu hoặc yêu cầu recovery sau này.

@@ -123,7 +123,11 @@ srvctl start database -d orcl
 
 ## Các lưu ý quan trọng:
 1. **Không tắt ngang máy ảo:** Tắt máy ảo đột ngột khi RAC đang chạy có thể gây lỗi Disk Group ASM hoặc lỗi File System.
-2. **Ưu tiên dùng `srvctl`:** Luôn dùng `srvctl` để quản lý DB trong RAC. Hạn chế dùng lệnh `shutdown` trong SQLPlus vì nó làm Clusterware hiểu nhầm là Instance bị lỗi và sẽ cố gắng restart lại nó.
+> [!WARNING]  
+> **KHÔNG SỬ DỤNG `shutdown immediate` trong SQLPlus**: 
+> Đối với cụm RAC, bạn tuyệt đối không nên dùng lệnh `shutdown` trực tiếp từ SQLPlus. 
+> 1. Nó chỉ tắt instance cục bộ, không tắt được toàn cụm.
+> 2. Quan trọng nhất: Clusterware sẽ hiểu nhầm là Instance bị lỗi đột ngột và sẽ tự động tìm cách **KHỞI ĐỘNG LẠI** instance đó ngay lập tức, dẫn đến xung đột. Luôn sử dụng lệnh `srvctl stop database`.
 3. **Log files:** Nếu gặp lỗi khi tắt/bật, hãy kiểm tra log tại:
    - GI Log: `$GRID_HOME/log/<hostname>/alert<hostname>.log`
    - DB Log: `$ORACLE_BASE/diag/rdbms/<db_name>/<sid>/trace/alert_<sid>.log`
