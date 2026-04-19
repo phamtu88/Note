@@ -58,13 +58,53 @@ Thông thường, Oracle Grid Infrastructure được cấu hình tự động b
 su - grid
 crsctl check crs
 ```
-*Kết quả mong đợi: CRS-4638, CRS-4537, CRS-4535 đều báo "is healthy".*
+*Kết quả mong đợi (Tất cả phải báo là `is online`):*
+
+```text
+CRS-4638: Oracle High Availability Services is online
+CRS-4537: Cluster Ready Services is online
+CRS-4529: Cluster Synchronization Services is online
+CRS-4533: Event Manager is online
+```
+
 
 Để xem chi tiết các tài nguyên (ASM, VIP, Listener...):
 ```bash
 crsctl status resource -t
 ```
-*Đảm bảo các cột `State` và `Target` đều là `ONLINE`.*
+*Kết quả mong đợi (Ví dụ):*
+```text
+--------------------------------------------------------------------------------
+Name           Target  State        Server                   State details       
+--------------------------------------------------------------------------------
+Local Resources
+--------------------------------------------------------------------------------
+ora.LISTENER.lsnr
+               ONLINE  ONLINE       oracle1                  STABLE
+               ONLINE  ONLINE       oracle2                  STABLE
+ora.asm
+               ONLINE  ONLINE       oracle1                  Started,STABLE
+               ONLINE  ONLINE       oracle2                  Started,STABLE
+ora.ons
+               ONLINE  ONLINE       oracle1                  STABLE
+               ONLINE  ONLINE       oracle2                  STABLE
+--------------------------------------------------------------------------------
+Cluster Resources
+--------------------------------------------------------------------------------
+ora.LISTENER_SCAN1.lsnr
+      1        ONLINE  ONLINE       oracle1                  STABLE
+ora.asmdg
+      1        ONLINE  ONLINE       oracle1                  STABLE
+      2        ONLINE  ONLINE       oracle2                  STABLE
+ora.orcl.db
+      1        ONLINE  ONLINE       oracle1                  Open,HOME=/u01/app/oracle/product/19.3.0/dbhome_1,STABLE
+      2        ONLINE  ONLINE       oracle2                  Open,HOME=/u01/app/oracle/product/19.3.0/dbhome_1,STABLE
+ora.scan1.vip
+      1        ONLINE  ONLINE       oracle1                  STABLE
+...
+```
+*Đảm bảo các cột `State` và `Target` đều là `ONLINE` cho các dịch vụ quan trọng.*
+
 
 ### Bước 3: Kiểm tra Database (User oracle)
 Database RAC cũng thường được cấu hình tự động bật khi Clusterware sẵn sàng.
