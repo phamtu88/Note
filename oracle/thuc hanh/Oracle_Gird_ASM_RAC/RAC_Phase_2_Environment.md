@@ -58,29 +58,38 @@ sysctl --system
 ```
 
 ## 2. Tạo User và Group cho hạ tầng Grid
-Mặc định gói preinstall chỉ tạo user `oracle`. Chúng ta cần tạo thêm user `grid` và gán vào các nhóm ASM chuyên dụng.
+Tùy vào việc bạn đã chạy gói `preinstall` (Online) hay chưa, các bước tạo User sẽ khác nhau.
 
+### 2.1 Tạo Nhóm (Groups) - [Cả 2 TH]
+Chạy trên **CẢ 2 NODES** bằng quyền `root`:
 ```bash
-# 1. Tạo các nhóm quản trị (Thực hiện trên CẢ 2 NODES)
-groupadd -g 54321 oinstall
-groupadd -g 54322 dba
-groupadd -g 54323 oper
-groupadd -g 54324 backupdba
-groupadd -g 54325 dgdba
-groupadd -g 54326 kmdba
-groupadd -g 54327 racdba
+# Nhóm quản trị ASM (Bắt buộc cho cả Online/Offline)
 groupadd -g 54315 asmadmin
 groupadd -g 54316 asmdba
 groupadd -g 54317 asmoper
 
-# 2. Tạo user (Nếu Case Offline chưa có user oracle)
-useradd -u 54321 -g oinstall -G dba,oper,backupdba,dgdba,kmdba,racdba,asmdba,asmadmin oracle 2>/dev/null
-useradd -u 54322 -g oinstall -G asmadmin,asmdba,asmoper,dba grid 2>/dev/null
+# Nhóm CSDL (Chỉ cần chạy nếu bạn làm Offline - Online đã có sẵn)
+groupadd -g 54321 oinstall 2>/dev/null
+groupadd -g 54322 dba 2>/dev/null
+groupadd -g 54323 oper 2>/dev/null
+groupadd -g 54324 backupdba 2>/dev/null
+groupadd -g 54325 dgdba 2>/dev/null
+groupadd -g 54326 kmdba 2>/dev/null
+groupadd -g 54327 racdba 2>/dev/null
+```
 
-# 3. Đảm bảo oracle cũng thuộc nhóm ASM
+### 2.2 Tạo Người dùng (Users) - [Cả 2 TH]
+```bash
+# 1. Tạo user grid (Luôn phải tạo thủ công)
+useradd -u 54322 -g oinstall -G asmadmin,asmdba,asmoper,dba grid
+
+# 2. Tạo/Cập nhật user oracle
+# [Offline]: Tạo mới hoàn toàn
+useradd -u 54321 -g oinstall -G dba,oper,backupdba,dgdba,kmdba,racdba,asmdba,asmadmin oracle 2>/dev/null
+# [Online]: Gói preinstall đã tạo sẵn oracle, ta chỉ cần thêm vào nhóm ASM
 usermod -a -G asmdba,asmadmin oracle
 
-# 4. Đặt mật khẩu (Bắt buộc phải làm trên cả 2 node để cấu hình SSH không lỗi)
+# 3. Đặt mật khẩu (Bắt buộc trên cả 2 node để SSH không lỗi)
 # Khuyên dùng: oracle123
 passwd grid
 passwd oracle
@@ -103,28 +112,60 @@ chmod -R 775 /u01
 ```
 
 ## 4. Cấu hình SSH Passwordless (Tối quan trọng)
-Bộ cài RAC cần di chuyển dữ liệu giữa các node tự động. Phải cấu hình cho **cả 2 user** trên **cả 2 node**.
+Bộ cài Oracle RAC cần các node có thể "nói chuyện" với nhau mà không hỏi mật khẩu. Chúng ta cấu hình cho **cả 2 user** `grid` và `oracle`.
+
+> [!IMPORTANT]
+> **Điều kiện tiên quyết:** Bạn BẮT BUỘC phải thực hiện lệnh `passwd grid` và `passwd oracle` trên **CẢ 2 NODES** trước khi làm bước này. Nếu không, lệnh `ssh-copy-id` sẽ bị lỗi `Permission denied`.
 
 > [!WARNING]
+> Mẹo tránh lỗi:
 > - **Chìa khóa (`ssh-keygen`)**: Nhấn <Enter> liên tục 3 lần, không nhập passphrase.
 > - **Lỗi `Host key verification failed`**: Phải gõ đủ chữ `yes` khi được hỏi lần đầu.
 
+### 4.1 Cấu hình cho User `grid`
+- **Trên Node 1:**
 ```bash
-# Ví dụ cấu hình cho user grid (Làm tương tự cho oracle)
 su - grid
 ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa
 ssh-copy-id oracle1
 ssh-copy-id oracle2
-
-# Kiểm tra: Lệnh sau phải trả về ngày tháng mà không hỏi mật khẩu
-ssh oracle2 date
+```
+- **Trên Node 2:**
+```bash
+su - grid
+ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa
+ssh-copy-id oracle1
+ssh-copy-id oracle2
 ```
 
-## 5. Cấu hình các tham số hệ thống bổ sung (Limits)
-Chạy trên **CẢ 2 NODES** bằng quyền `root` để bổ sung giới hạn tài nguyên cho user `grid` (vì gói preinstall chỉ làm cho oracle).
+### 4.2 Cấu hình cho User `oracle`
+Thực hiện tương tự các bước trên cho user `oracle` trên **cả 2 Node**.
 
+**Kiểm tra:** Trên mỗi node, dùng cả 2 user để chạy thử lệnh `ssh <tên_node> date`. Nếu không hỏi mật khẩu là thành công.
+
+## 5. Cấu hình các tham số hệ thống bổ sung (Limits)
+Chạy trên **CẢ 2 NODES** bằng quyền `root`. 
+
+### Trường hợp A: Online (Có gói Preinstall)
+Gói preinstall đã cấu hình cho user `oracle`, bạn chỉ cần chèn thêm cho `grid`:
 ```bash
-# Tạo file limit (Áp dụng cho cả oracle và grid)
+cat <<EOF >> /etc/security/limits.d/oracle-database-preinstall-19c.conf
+
+# Bổ sung giới hạn cho user grid
+grid   soft   nofile    1024
+grid   hard   nofile    65536
+grid   soft   nproc     2047
+grid   hard   nproc     16384
+grid   soft   stack     10240
+grid   hard   stack     32768
+grid   hard   memlock   134217728
+grid   soft   memlock   134217728
+EOF
+```
+
+### Trường hợp B: Offline (Cài thủ công)
+Bắt buộc tạo mới file cấu hình cho cả 2 user:
+```bash
 cat > /etc/security/limits.d/99-oracle-limits.conf <<EOF
 oracle   soft   nofile    1024
 oracle   hard   nofile    65536
@@ -144,23 +185,53 @@ grid     soft   memlock   134217728
 EOF
 ```
 
+**Kiểm tra:** `tail -n 15 /etc/security/limits.d/*.conf`
+
 ## 6. Thiết lập biến môi trường (.bash_profile)
-Mỗi Node có `ORACLE_SID` riêng, hãy cấu hình cẩn thận:
+Mỗi Node có `ORACLE_SID` riêng, hãy cấu hình cẩn thận bằng cách dán đoạn code sau vào cuối file `~/.bash_profile`.
 
-**Trên Node 1 (oracle1):**
-- User `grid`: `ORACLE_SID=+ASM1`, `ORACLE_BASE=/u01/app/grid`, `ORACLE_HOME=/u01/app/19.3.0/grid`.
-- User `oracle`: `ORACLE_SID=orcl1`, `ORACLE_BASE=/u01/app/oracle`.
+**Tại Node 1 (oracle1):**
+- **User `grid`**:
+```bash
+export ORACLE_SID=+ASM1
+export ORACLE_BASE=/u01/app/grid
+export ORACLE_HOME=/u01/app/19.3.0/grid
+export PATH=$ORACLE_HOME/bin:$PATH
+```
+- **User `oracle`**:
+```bash
+export ORACLE_SID=orcl1
+export ORACLE_UNQNAME=orcl
+export ORACLE_BASE=/u01/app/oracle
+export ORACLE_HOME=$ORACLE_BASE/product/19.0.0/dbhome_1
+export PATH=$ORACLE_HOME/bin:$PATH
+```
 
-**Trên Node 2 (oracle2):**
-- User `grid`: `ORACLE_SID=+ASM2`, `ORACLE_BASE=/u01/app/grid`, `ORACLE_HOME=/u01/app/19.3.0/grid`.
-- User `oracle`: `ORACLE_SID=orcl2`, `ORACLE_BASE=/u01/app/oracle`.
+**Tại Node 2 (oracle2):**
+- **User `grid`**:
+```bash
+export ORACLE_SID=+ASM2
+export ORACLE_BASE=/u01/app/grid
+export ORACLE_HOME=/u01/app/19.3.0/grid
+export PATH=$ORACLE_HOME/bin:$PATH
+```
+- **User `oracle`**:
+```bash
+export ORACLE_SID=orcl2
+export ORACLE_UNQNAME=orcl
+export ORACLE_BASE=/u01/app/oracle
+export ORACLE_HOME=$ORACLE_BASE/product/19.0.0/dbhome_1
+export PATH=$ORACLE_HOME/bin:$PATH
+```
 
 ## 7. Đồng bộ thời gian với Chrony
 ```bash
 timedatectl set-timezone Asia/Ho_Chi_Minh
+yum install -y chrony
 systemctl enable --now chronyd
 chronyc -a makestep
-# Kiểm tra: Có dấu ^* ở lệnh 'chronyc sources' là đạt yêu cầu.
+# Kiểm tra: Để ý danh sách có dấu ^* là đang đồng bộ tốt.
+chronyc sources -v
 ```
 
 ## 8. Cấu hình UDEV Rules cho ASM
