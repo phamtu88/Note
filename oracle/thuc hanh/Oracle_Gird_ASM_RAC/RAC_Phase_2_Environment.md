@@ -321,6 +321,13 @@ lrwxrwxrwx 1 root root 6 Apr 15 10:36 /dev/oracleasm/asm_data1 -> ../sdc
 lrwxrwxrwx 1 root root 6 Apr 15 10:36 /dev/oracleasm/asm_fra1 -> ../sdd
 ```
 
+Và kiểm tra quyền của thiết bị gốc:
+```bash
+ls -l /dev/sdb /dev/sdc /dev/sdd
+```
+Kết quả phải hiển thị owner là `grid` và group là `asmadmin`
+
+
 > [!CAUTION]
 > Khi cài đặt Grid Infrastructure (ở bước sau), tại màn hình chọn Disk, bạn phải thay đổi **Disk Discovery Path** thành `/dev/oracleasm/*` thì bộ cài mới nhìn thấy các ổ đĩa này.
 
