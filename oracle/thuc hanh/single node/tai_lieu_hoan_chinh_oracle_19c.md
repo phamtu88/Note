@@ -11,7 +11,7 @@ Việc chuẩn bị nền móng tài nguyên tốt giúp Database hoạt động
 ### a. Tài nguyên Máy Ảo (VMware / Server)
 - **CPU:** Tối thiểu 2 Cores, khuyến nghị **4 Cores** (Giúp compile kiến trúc lúc cài đặt nhanh hơn rất nhiều).
 - **RAM:** Tối thiểu 4GB, khuyến nghị vùng **8GB - 16GB** (Đủ để cấp phát cho các bộ đệm chung tập trung cho SGA/PGA của database).
-- **Network:** Chế độ NAT hoặc Bridged với **IP tĩnh (Static IP)** và có Hostname cụ thể (ví dụ: `ora19c.localdomain`). Điều này tránh lỗi listener của Oracle bị đổi địa chỉ ở các thiết lập khởi động.
+- **Network:** Chế độ NAT hoặc Bridged với **IP tĩnh (Static IP)** và có Hostname cụ thể (ví dụ: `oracle19.localdomain`). Điều này tránh lỗi listener của Oracle bị đổi địa chỉ ở các thiết lập khởi động.
 
 ### b. Chiến Lược Chia Ổ Cứng (Disk Partitioning)
 Thay vì dùng 1 ổ cứng lớn gộp chung, nên chia nhiều ổ cứng vật lý ảo riêng rẽ để đảm bảo tối ưu tốc độ đọc ghi I/O và dễ sửa chữa, dễ backup:
@@ -125,7 +125,7 @@ Tiến hành thêm IP tĩnh và Hostname của máy vào cuối file `/etc/hosts
 vi /etc/hosts
 
 # HOẶC dùng lệnh chèn nhanh sau (Thay 192.168.1.100 bằng IP thật của máy ảo):
-echo "192.168.1.100   ora19c.localdomain   ora19c" >> /etc/hosts
+echo "192.168.1.100   oracle19.localdomain   oracle19" >> /etc/hosts
 ```
 
 ### a. Sử dụng gói Tự động của Oracle Pre-install (Thao tác bằng `root`)
@@ -244,7 +244,7 @@ Tiến hành đổi phiên vào nhân tài khoản của `oracle` (Dùng cờ mi
 ```bash
 export TMP=/tmp
 export TMPDIR=$TMP
-export ORACLE_HOSTNAME=ora19c.localdomain   # Thay đúng bằng Hostname thật đang chạy để tránh báo lỗi mạng
+export ORACLE_HOSTNAME=oracle19.localdomain   # Thay đúng bằng Hostname thật đang chạy để tránh báo lỗi mạng
 export ORACLE_UNQNAME=orcl                  
 export ORACLE_BASE=/u01/app/oracle
 export ORACLE_HOME=$ORACLE_BASE/product/19.0.0/dbhome_1
