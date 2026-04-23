@@ -6,11 +6,12 @@
 # Thực thi: Chạy bằng quyền ROOT.
 # ==============================================================================
 
-# 1. Tắt Firewall & SELinux
-echo ">>> Stopping Firewall and SELinux..."
+# 1. Tắt Firewall, SELinux và cấu hình Hosts
+echo ">>> Stopping Firewall, SELinux and configuring Hosts..."
 systemctl stop firewalld && systemctl disable firewalld
 setenforce 0
 sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config
+echo "192.168.1.100   oracle19.localdomain   oracle19" >> /etc/hosts
 
 # 2. Cấu hình Local Repo (Trỏ vào /mnt)
 echo ">>> Configuring Local Repository from ISO..."
