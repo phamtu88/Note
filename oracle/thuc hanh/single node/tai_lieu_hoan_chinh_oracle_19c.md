@@ -245,10 +245,10 @@ Tiến hành đổi phiên vào nhân tài khoản của `oracle` (Dùng cờ mi
 export TMP=/tmp
 export TMPDIR=$TMP
 export ORACLE_HOSTNAME=oracle19.localdomain   # Thay đúng bằng Hostname thật đang chạy để tránh báo lỗi mạng
-export ORACLE_UNQNAME=orcl                  
+export ORACLE_UNQNAME=oracle19                  
 export ORACLE_BASE=/u01/app/oracle
 export ORACLE_HOME=$ORACLE_BASE/product/19.0.0/dbhome_1
-export ORACLE_SID=orcl                      
+export ORACLE_SID=oracle19                      
 export PATH=$ORACLE_HOME/bin:$PATH
 ```
 Chạy update ngay bằng từ khóa: `source ~/.bash_profile`.
@@ -293,11 +293,19 @@ Gọi Universal Installer để khởi chạy bộ GUI OUI ra xử lý quá trì
 *   **Bước 4 (Installation Location):**
     - *Lưu ý:* Thư mục Oracle Base nên là `/u01/app/oracle`. Tránh để trong Home của user cá nhân để không bị lỗi phân quyền.
 
+*   **Bước 5 (Create Inventory):**
+    - *Inventory Directory:* Để mặc định là `/u01/app/oraInventory` (Nơi Oracle lưu metadata của bộ cài).
+    - *oraInventory Group Name:* Chọn `oinstall`.
+
+*   **Bước 6 (Configuration Type):**
+    - *Lựa chọn:* Nhấn chọn `General Purpose / Transaction Processing`.
+    - *Tại sao:* Tối ưu cho cơ sở dữ liệu xử lý giao dịch thông thường và học tập. Tùy chọn còn lại chỉ dành cho Data Warehouse (Kho dữ liệu phân tích lớn).
+
 *   **Bước 7 (Database Identifiers):**
-    - `Global DB Name`: Tên của DB trong mạng.
-    - `SID`: Tên instance (thường để là `orcl`).
+    - `Global DB Name`: Tên của DB trong mạng (ví dụ: `oracle19.localdomain`).
+    - `SID`: Tên instance (thay vì mặc định `orcl`, ta đổi thành `oracle19` cho đồng bộ).
     - **Tùy chọn Container database:** 
-        - *Nếu tích (CDB):* Bạn đang theo chuẩn hiện đại mới của Oracle (Multitenant). Cho phép tạo nhiều DB con (PDB) bên trong. 
+        - *Nếu tích (CDB):* Bạn đang theo chuẩn hiện đại của Oracle (Multitenant). Ghi nhận tạo Pluggable database name là `orclpdb`.
         - *Nếu không tích:* Bạn dùng kiểu cũ (Non-CDB). Đơn giản, dễ quản lý cho người mới bắt đầu.
 
 *   **Bước 8 (Configuration Options):** 
