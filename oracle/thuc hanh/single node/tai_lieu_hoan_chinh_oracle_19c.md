@@ -448,6 +448,12 @@ systemctl start dbora.service
 - **Lỗi [INS-20802] Oracle Net Configuration Assistant failed (Tiến trình cấu hình Listener bị Crash):**
     - *Nguyên nhân:* Thường gặp ở Bước 17 (Progress ~59%). Do địa chỉ IP bạn ghi ở tệp `/etc/hosts` bị sai lệch so với IP hệ thống thực tế hiện tại, khiến Listener không thể định danh (bind) thông qua port tĩnh 1521.
     - *Cách xử lý:* Giữ nguyên màn hình cài đặt. Mở cửa sổ terminal mới (quyền `root`), kiểm tra biến số IP thật bằng lệnh `ip a`. Sau đó sửa dứt điểm lỗi IP trong cấu hình `vi /etc/hosts`. Quay lại giao diện Oracle, bấm OK để đóng khung cảnh báo và kéo chọn **Retry**, hệ thống sẽ phục hồi kết nối.
+- **Lỗi ORA-01034: ORACLE not available (Lỗi kết nối trượt Instance):**
+    - *Nguyên nhân:* Do khi đăng nhập SQL*Plus, Terminal không biết hoặc nhận diện sai tên SID (ví dụ đang là `orcl` thay vì `oracle19`), hoặc Database thực sự chưa được bật.
+    - *Cách xử lý:* Thoát ra bash (gõ `exit`), nạp lại môi trường bằng lệnh `source ~/.bash_profile` rồi đăng nhập thử lại. Nếu vẫn bị lỗi, hãy gõ lệnh `startup` trực tiếp trong prompt SQL*Plus để nạp Database lên.
+- **Lỗi ORA-00936: missing expression (Thiếu biểu thức):**
+    - *Nguyên nhân:* Gõ sai cú pháp SQL cơ bản (ví dụ lỗi thiếu tên cột tham chiếu giữa chữ `select` và `from`).
+    - *Cách xử lý:* Sửa lại câu lệnh có chứa khai báo đầy đủ thành phần (Ví dụ `select * from v$instance` hoặc `select status from v$instance`).
 
 ## 7. GỠ BỎ HOÀN TOÀN GÓI PREINSTALL VÀ DỌN SẠCH HỆ THỐNG (UNDO / ROLLBACK)
 
