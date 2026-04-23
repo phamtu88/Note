@@ -435,25 +435,8 @@ systemctl start dbora.service
 
 ## 6. CẨM NANG "BẮT BỆNH" - XỬ LÝ LỖI NGẦM HAY GẶP (TROUBLESHOOTING)
 
-> [!IMPORTANT]
-> Toàn bộ quá trình thao tác sẽ tiềm ẩn một loạt các cạm bẫy đặc hữu. Hãy làm chủ chúng.
-
-- **Thiếu Mất Group User:** Vòng chọn Nhánh Group báo màn trắng rỗng do lỗi gõ lệnh tạo user tay chống đè script yum Preinstall. Chữa cháy siêu nhanh là dùng terminal Root tạo thủ công `groupadd -f oinstall..` và nạp quyền quản lý ngược vào cho user.
-- **Tiến Trình Chặn Lỗi Giao Diện Đồ Hoạ X11-Display:** Tránh hoàn toàn việc sử dụng lóng ngóng lệnh `xhost +`. Nếu bạn nối SSH từ máy tính ngoài chỉ để setup, công cụ bảo bối hiệu quả nhất toàn thế giới vẫn là **MobaXterm** (vừa kết nối SSH tiện dụng vừa cõng Giao Diện thẳng xuyên cổng Port 22 vượt luôn rào cản).
-- **Lỗi [INS-35178] (AMM > 4GB RAM):** 
-    - *Nguyên nhân:* Oracle 19c không cho phép dùng Automatic Memory Management (AMM) nếu RAM máy ảo > 4GB.
-    - *Cách xử lý:* Quay lại tab **Memory**, **bỏ tích** ô "Enable Automatic Memory Management". Oracle sẽ chuyển sang dùng ASMM (tốt hơn cho máy cấu hình mạnh).
-- **Thư Mục Trống của `oraInventory` (Lỗi [INS-32047]):** Nếu OUI pop-up có báo cáo "[INS-32047] Folder is not empty" thì nhấp Yes ép cho qua vì đó là log rác từ việc tải dở quá trình cài thất bại lần trước còn bỏ lại. Dễ dàng ghi lấp đè là được.
-- **Treo Tiến trình Systemctl (Lỗi 127):** Thường do file `/etc/oratab` trống rỗng hoặc script bạn chép mạng có dính lệnh bắt tương tác `. oraenv`. Hãy luôn sử dụng thiết lập Service 5 bước ở [Mục 5] phía trên để vượt ải an toàn.
-- **Lỗi [INS-20802] Oracle Net Configuration Assistant failed (Tiến trình cấu hình Listener bị Crash):**
-    - *Nguyên nhân:* Thường gặp ở Bước 17 (Progress ~59%). Do địa chỉ IP bạn ghi ở tệp `/etc/hosts` bị sai lệch so với IP hệ thống thực tế hiện tại, khiến Listener không thể định danh (bind) thông qua port tĩnh 1521.
-    - *Cách xử lý:* Giữ nguyên màn hình cài đặt. Mở cửa sổ terminal mới (quyền `root`), kiểm tra biến số IP thật bằng lệnh `ip a`. Sau đó sửa dứt điểm lỗi IP trong cấu hình `vi /etc/hosts`. Quay lại giao diện Oracle, bấm OK để đóng khung cảnh báo và kéo chọn **Retry**, hệ thống sẽ phục hồi kết nối.
-- **Lỗi ORA-01034: ORACLE not available (Lỗi kết nối trượt Instance):**
-    - *Nguyên nhân:* Do khi đăng nhập SQL*Plus, Terminal không biết hoặc nhận diện sai tên SID (ví dụ đang là `orcl` thay vì `oracle19`), hoặc Database thực sự chưa được bật.
-    - *Cách xử lý:* Thoát ra bash (gõ `exit`), nạp lại môi trường bằng lệnh `source ~/.bash_profile` rồi đăng nhập thử lại. Nếu vẫn bị lỗi, hãy gõ lệnh `startup` trực tiếp trong prompt SQL*Plus để nạp Database lên.
-- **Lỗi ORA-00936: missing expression (Thiếu biểu thức):**
-    - *Nguyên nhân:* Gõ sai cú pháp SQL cơ bản (ví dụ lỗi thiếu tên cột tham chiếu giữa chữ `select` và `from`).
-    - *Cách xử lý:* Sửa lại câu lệnh có chứa khai báo đầy đủ thành phần (Ví dụ `select * from v$instance` hoặc `select status from v$instance`).
+> Nội dung phần này đã được tổng hợp, cập nhật và tách thành tài liệu riêng biệt chuyên sâu để bạn dễ tra cứu và tham khảo trong quá trình làm lab:
+> 📄 **[troubleshoot_error_oracle_19c.md](troubleshoot_error_oracle_19c.md)**
 
 ## 7. GỠ BỎ HOÀN TOÀN GÓI PREINSTALL VÀ DỌN SẠCH HỆ THỐNG (UNDO / ROLLBACK)
 
