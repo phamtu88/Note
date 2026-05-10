@@ -1,0 +1,8 @@
+**Redo Log Files** đóng vai trò mang tính quyết định trong việc đảm bảo an toàn dữ liệu và khả năng khôi phục hệ thống (Instance Recovery) khi xảy ra các sự cố như sập máy chủ (crash server) 1\.  
+Cụ thể, vai trò này được thể hiện qua các điểm cốt lõi sau:
+
+* **Lưu trữ toàn bộ lịch sử giao dịch:** Redo Log Files là các tệp vật lý trên đĩa cứng có nhiệm vụ ghi lại lịch sử của mọi sự thay đổi dữ liệu và giao dịch diễn ra trong cơ sở dữ liệu theo cơ chế ghi vòng tròn (round robin) 1\.  
+* **Bảo vệ dữ liệu, chống mất mát (Kết hợp với tiến trình LGWR):** Mọi sự thay đổi (Transaction logs) ban đầu được lưu tạm tại vùng đệm **Redo Log Buffer** trên RAM 2\. Sau đó, tiến trình **LGWR (Log Writer)** sẽ hoạt động cực nhanh để đồng bộ các thông tin này từ RAM xuống Redo Log Files để chốt các giao dịch (COMMIT) 2, 3\. Mục tiêu là đảm bảo mọi giao dịch đã được xác nhận sẽ an toàn tuyệt đối và không bị mất đi kể cả khi hệ thống sập nguồn bất ngờ 2\.  
+* **Nền tảng cho quá trình Instance Recovery:** Như đã đề cập ở tiến trình SMON, nếu máy chủ gặp sự cố, những thay đổi trên RAM (Buffer Cache) chưa kịp ghi xuống tệp dữ liệu chính (Datafiles) sẽ bị xóa sạch. Lúc khởi động lại, hệ thống sẽ sử dụng chính các bản ghi trong Redo Log Files để khôi phục và chạy lại các giao dịch đã hoàn tất đó 1\.  
+* **Hỗ trợ khôi phục dữ liệu dài hạn (Kết hợp với tiến trình ARCn):** Vì Redo Log Files ghi theo dạng xoay vòng, dữ liệu cũ có nguy cơ bị ghi đè. Để phục hồi dữ liệu ở các thời điểm xa trong quá khứ, khi cơ sở dữ liệu đặt ở chế độ ARCHIVELOG, tiến trình **ARCn** sẽ copy và đẩy các Redo Logs đã vận hành đầy sang một không gian backup ngoại tuyến trước khi tiến trình LGWR ghi đè lên chúng 3\.
+
