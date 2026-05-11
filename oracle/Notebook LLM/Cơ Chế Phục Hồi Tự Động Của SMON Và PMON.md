@@ -1,0 +1,13 @@
+Dưới đây là phần giải thích chi tiết và chuyên sâu hơn về hai tiến trình **SMON** và **PMON**, được ví như những "người dọn dẹp và y tá" thiết yếu giúp hệ thống Oracle tự động phục hồi và duy trì sự ổn định 1\.  
+**1\. Tiến trình SMON (System Monitor \- Phục hồi ở cấp độ Hệ thống)**SMON đóng vai trò là "người cấp cứu toàn cục", tập trung vào việc tự vá lỗi và dọn dẹp tổng thể cho toàn bộ hệ thống (Instance) 1, 2\. Các nhiệm vụ chính của SMON bao gồm:
+
+* **Phục hồi Instance (Instance Recovery):** Khi máy chủ gặp sự cố sập nguồn đột ngột (crash server) do lỗi phần cứng hoặc mất điện, các dữ liệu trên RAM chưa kịp ghi xuống đĩa (Datafiles) sẽ bị xóa sạch 1, 3\. Ngay khi hệ thống khởi động lại, SMON sẽ tự động kích hoạt quá trình "chữa lành". Nó sử dụng các bản ghi nhật ký trong **Redo Log Files** để chạy lại toàn bộ các giao dịch đã hoàn tất nhưng chưa kịp chốt xuống đĩa, đồng thời tiến hành loại bỏ (rollback) những dữ liệu rác hoặc đang xử lý dang dở để đảm bảo tính nhất quán tuyệt đối cho cơ sở dữ liệu 1, 3\.  
+* **Dọn dẹp không gian tạm (Temporary Segment):** Trong quá trình vận hành, hệ thống thường tạo ra các phân vùng tạm thời để xử lý dữ liệu. Khi các phân vùng này không còn được sử dụng nữa, SMON sẽ tự động đi thu dọn các không gian dư thừa này để trả lại tài nguyên lưu trữ cho cơ sở dữ liệu 1\.
+
+**2\. Tiến trình PMON (Process Monitor \- Phục hồi ở cấp độ Tiến trình)**Trái ngược với quy mô toàn hệ thống của SMON, PMON đóng vai trò như một "người quản lý vi mô". PMON chuyên giám sát và dọn dẹp hậu quả do các phiên làm việc (sessions) hoặc tiến trình người dùng (User processes) bị lỗi gây ra 2, 4\.
+
+* **Dọn dẹp sau sự cố người dùng:** Khi có một kết nối bị ngắt đột ngột (do rớt mạng, ứng dụng tắt ngang, hoặc tiến trình bị chết \- dead process), Server Process phục vụ cho kết nối đó sẽ bị rơi vào trạng thái treo 4\.  
+* **Giải phóng tài nguyên bộ nhớ:** PMON sẽ ngay lập tức phát hiện các tiến trình "chết" này để tiến hành thu hồi và dọn dẹp không gian RAM (nằm trong PGA hoặc SGA) đang bị chiếm dụng vô ích 4\.  
+* **Tháo gỡ khóa (Lock release):** Đây là chức năng quan trọng nhất của PMON. Nếu một người dùng bị rớt mạng khi đang khóa (lock) một số khối dữ liệu (blocks) để chỉnh sửa, tiến trình này sẽ làm treo hệ thống vì người khác không thể thao tác trên các dữ liệu đó. PMON sẽ can thiệp để **tháo gỡ các khóa này**, giúp giải phóng cục diện để những người dùng khác có thể truy cập và thao tác bình thường mà không bị kẹt 4\.
+
+**Tóm lại:** Nếu **SMON** là tiến trình cấp cứu toàn cục giúp cứu sống hệ thống sau các đợt sập nguồn lớn, thì **PMON** là tiến trình âm thầm đi dọn rác bộ nhớ và gỡ bỏ các ách tắc cục bộ do lỗi rớt mạng của từng người dùng cá nhân gây ra 2\.  
