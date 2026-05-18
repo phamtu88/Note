@@ -238,3 +238,42 @@ Nếu có giao dịch bị kẹt (state là `prepared` hoặc `collecting`), hã
 ROLLBACK FORCE 'local_tran_id';
 -- Ví dụ: ROLLBACK FORCE '1.14.2389';
 ```
+
+### 8.5. Kỹ thuật tạo Private DB Link cho một User khác (Thủ thuật DBA)
+Cú pháp mặc định của Oracle **không cho phép** bạn chỉ định schema của người khác khi tạo DB Link (Ví dụ: lệnh `CREATE DATABASE LINK hr.my_link...` sẽ bị báo lỗi). 
+Tuy nhiên trong thực tế, các DBA thường phải tạo Private DB Link cho một User ứng dụng (ví dụ User `APP_USER`), ngặt nỗi DBA lại **không có mật khẩu** của User đó để đăng nhập. Lúc này, bạn có thể áp dụng 1 trong 2 "tuyệt chiêu" sau:
+
+**Cách 1: Mượn tay User đó qua Procedure tạm (Phổ biến nhất)**
+Đứng từ tài khoản SYSTEM/SYS, bạn tạo một đoạn code (Procedure) ép nó nằm bên trong nhà của User kia, kích hoạt nó để nó chạy lệnh tạo DB Link, rồi xóa đoạn code đó đi.
+```sql
+-- Bước 1: Tạo Procedure tạm bên trong schema APP_USER
+CREATE OR REPLACE PROCEDURE app_user.create_temp_dblink AS
+BEGIN
+  -- Chú ý: Dùng 2 dấu nháy đơn '' cho phần TNS Alias
+  EXECUTE IMMEDIATE 'CREATE DATABASE LINK target_link CONNECT TO remote_user IDENTIFIED BY "password" USING ''db19c_pdb1''';
+END;
+/
+
+-- Bước 2: Yêu cầu chạy Procedure (Lúc này DB Link sẽ được tạo cho APP_USER)
+EXEC app_user.create_temp_dblink;
+
+-- Bước 3: Dọn dẹp dấu vết
+DROP PROCEDURE app_user.create_temp_dblink;
+```
+
+**Cách 2: Sử dụng Proxy Authentication (Nhập vai)**
+Bạn cho phép tài khoản SYSTEM được phép "nhập hồn" thành APP_USER để tạo DB Link mà không cần biết mật khẩu của APP_USER.
+```sql
+-- Bước 1: Cho phép SYSTEM nhập vai APP_USER
+ALTER USER app_user GRANT CONNECT THROUGH system;
+
+-- Bước 2: Chuyển đổi Session thành APP_USER (Dùng luôn mật khẩu của SYSTEM)
+CONNECT system[app_user]/MatKhauCuaSystem;
+
+-- Bước 3: Tạo DB Link như bình thường (Nó sẽ thuộc về APP_USER)
+CREATE DATABASE LINK target_link CONNECT TO remote_user IDENTIFIED BY "password" USING 'db19c_pdb1';
+
+-- Bước 4: Đăng nhập lại SYSTEM và thu hồi quyền nhập vai
+CONNECT system/MatKhauCuaSystem;
+ALTER USER app_user REVOKE CONNECT THROUGH system;
+```
