@@ -134,3 +134,44 @@ SELECT owner, db_link, username, host, created
 FROM dba_db_links;
 ```
 *(Lưu ý: Các DB Link có Owner là `SYS` hoặc `SEEDDATA` thường là DB Link nội bộ mặc định do Oracle tự sinh ra, không nên can thiệp).*
+
+---
+
+## 7. Các lỗi phổ biến và cách khắc phục
+
+### 7.1. Lỗi ORA-12154: TNS:could not resolve the connect identifier specified
+Lỗi này thường xảy ra khi bạn dùng TNS Alias (ví dụ `USING 'db19c_pdb1'`) để tạo DB Link nhưng lại nhận được thông báo lỗi TNS khi chạy truy vấn.
+
+**Nguyên nhân gốc rễ (Hiểu nhầm về kiến trúc):**
+Khi bạn gọi DB Link, câu lệnh thực chất được thực thi **trên máy chủ Server**. Do đó, Oracle sẽ đi tìm TNS Alias `db19c_pdb1` trong file `tnsnames.ora` của chính máy chủ Linux, chứ không phải file trên máy Client (Windows) của bạn. Nếu trên máy chủ Linux chưa khai báo alias này, hệ thống sẽ báo lỗi không tìm thấy.
+
+**Cách khắc phục:**
+Có 2 cách để xử lý triệt để:
+
+*   **Cách 1 (Giữ nguyên DB Link): Khai báo bổ sung trên Server**
+    Mở file `tnsnames.ora` trên máy chủ Linux (Thường ở `$ORACLE_HOME/network/admin/tnsnames.ora`) và thêm cấu hình vào cuối file.
+    ```text
+    db19c_pdb1 =
+      (DESCRIPTION =
+        (ADDRESS = (PROTOCOL = TCP)(HOST = localhost)(PORT = 1521))
+        (CONNECT_DATA =
+          (SERVER = DEDICATED)
+          (SERVICE_NAME = pdb1)
+        )
+      )
+    ```
+    *Mẹo để tìm đúng Service Name:* Đứng ở terminal máy chủ gõ lệnh `lsnrctl status` để xem danh sách chính xác các Service Name.
+
+*   **Cách 2 (Bỏ qua tnsnames): Dùng thẳng chuỗi kết nối EZConnect**
+    Xóa DB Link cũ và tạo lại bằng cách điền trực tiếp IP, Port và Service Name vào mệnh đề `USING`.
+    ```sql
+    DROP DATABASE LINK test_link;
+    
+    CREATE DATABASE LINK test_link 
+    CONNECT TO system IDENTIFIED BY oracle 
+    USING 'localhost:1521/pdb1';
+    ```
+
+### 7.2. Lỗi ORA-02019: connection description for remote database not found
+**Nguyên nhân:** Bạn gọi sai tên DB Link trong câu truy vấn (gõ thừa/thiếu ký tự, ví dụ: tên thật là `test_link` nhưng gõ thành `test_links`).
+**Khắc phục:** Chạy lệnh `SELECT * FROM dba_db_links;` để xem lại chính xác tên của DB Link và gõ lại cho đúng.
