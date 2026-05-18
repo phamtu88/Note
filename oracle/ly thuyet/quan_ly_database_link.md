@@ -122,6 +122,13 @@ COL host FORMAT A30;
 ```
 
 ### Lệnh truy vấn danh sách DB Link
+
+Lấy toàn bộ các cột (Dễ bị vỡ dòng nếu màn hình nhỏ):
+```sql
+SELECT * FROM dba_db_links;
+```
+
+Lấy các cột quan trọng nhất (Gọn gàng, dễ nhìn hơn):
 ```sql
 SELECT owner, db_link, username, host, created 
 FROM dba_db_links;
