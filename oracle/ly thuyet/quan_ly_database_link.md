@@ -175,3 +175,66 @@ Có 2 cách để xử lý triệt để:
 ### 7.2. Lỗi ORA-02019: connection description for remote database not found
 **Nguyên nhân:** Bạn gọi sai tên DB Link trong câu truy vấn (gõ thừa/thiếu ký tự, ví dụ: tên thật là `test_link` nhưng gõ thành `test_links`).
 **Khắc phục:** Chạy lệnh `SELECT * FROM dba_db_links;` để xem lại chính xác tên của DB Link và gõ lại cho đúng.
+
+---
+
+## 8. Các kỹ thuật nâng cao với DB Link (Mở rộng theo chuẩn DBA)
+
+### 8.1. Xử lý mật khẩu có ký tự đặc biệt
+Nếu mật khẩu của User đích chứa các ký tự đặc biệt (như `@`, `#`, `!`), bạn **bắt buộc phải bọc mật khẩu trong cặp dấu ngoặc kép `""`**, nếu không quá trình khởi tạo sẽ báo lỗi.
+```sql
+CREATE DATABASE LINK test_link 
+CONNECT TO system IDENTIFIED BY "P@ssw0rd_123" 
+USING 'db19c_pdb1';
+```
+
+### 8.2. Tạo Synonym (Bí danh) để che giấu DB Link
+Thay vì mỗi lần truy vấn phải gõ đuôi DB Link dài dòng (Ví dụ: `SELECT * FROM employees@erp_hr_link;`), bạn có thể tạo một Synonym để che giấu đi sự tồn tại của DB Link đó.
+```sql
+CREATE SYNONYM nhan_vien FOR employees@erp_hr_link;
+
+-- Từ giờ, bạn chỉ cần truy vấn bảng như thể nó nằm ở máy nội bộ:
+SELECT * FROM nhan_vien;
+```
+*Kỹ thuật này vừa giúp bảo mật kiến trúc hệ thống, vừa giúp lập trình viên không phải sửa lại code Application nếu sau này hạ tầng thay đổi tên DB Link.*
+
+### 8.3. Đóng kết nối DB Link thủ công (Giải phóng tài nguyên)
+Khi bạn thực hiện truy vấn qua DB Link, Oracle sẽ ngầm định mở và giữ lại một Session ở máy chủ đích để phục vụ cho các câu lệnh tiếp theo (nếu có). 
+Để tránh lãng phí tài nguyên (hoặc gây lỗi vượt quá số lượng session cho phép ở máy đích), bạn có thể chủ động đóng kết nối ngay sau khi hoàn tất công việc:
+```sql
+COMMIT; -- (Hoặc ROLLBACK để kết thúc Transaction)
+ALTER SESSION CLOSE DATABASE LINK test_link;
+```
+
+### 8.4. Giám sát và xử lý Treo/Lock qua DB Link (Kill Lock DB Link)
+Khi một User thực hiện lệnh DML (INSERT, UPDATE, DELETE) qua DB Link mà quên chưa COMMIT/ROLLBACK, hoặc kết nối mạng đột ngột bị đứt, giao dịch này sẽ bị treo (In-doubt Transaction) và gây Lock dữ liệu ở máy chủ đích.
+
+**Bước 1: Truy tìm Session đang gây Lock ở máy chủ đích**
+Đứng tại máy chủ đích (nơi bị Lock), chạy câu lệnh sau để phát hiện các giao dịch phân tán (Distributed Transactions) đến từ máy chủ khác:
+```sql
+SELECT s.sid, s.serial#, s.username, s.machine, s.osuser,
+       g.global_tran_fmt, g.global_oracle_id, g.state
+FROM v$session s
+JOIN v$global_transaction g ON s.saddr = g.session_addr;
+```
+*(Cột `machine` sẽ cho bạn biết chính xác máy chủ nào đang dùng DB Link gọi sang gây Lock).*
+
+**Bước 2: Kill (Tiêu diệt) Session gây Lock**
+Dựa vào `SID` và `SERIAL#` tìm được ở Bước 1, bạn tiến hành ngắt kết nối phiên làm việc đó:
+```sql
+ALTER SYSTEM KILL SESSION 'sid,serial#' IMMEDIATE;
+
+-- Ví dụ:
+ALTER SYSTEM KILL SESSION '145,2389' IMMEDIATE;
+```
+
+**Bước 3: Xử lý triệt để giao dịch mồ côi (Dành cho DBA)**
+Trong một số trường hợp, dù đã Kill Session nhưng dữ liệu vẫn bị treo lơ lửng. Bạn phải kiểm tra bảng `dba_2pc_pending`:
+```sql
+SELECT local_tran_id, state FROM dba_2pc_pending;
+```
+Nếu có giao dịch bị kẹt (state là `prepared` hoặc `collecting`), hãy ép hệ thống dọn dẹp nó:
+```sql
+ROLLBACK FORCE 'local_tran_id';
+-- Ví dụ: ROLLBACK FORCE '1.14.2389';
+```
