@@ -1,6 +1,6 @@
 # Tài Liệu Quản Trị: Cấu hình và Tạo Tablespace trong Oracle
 
-Tài liệu này hướng dẫn cách kiểm tra cấu hình lưu trữ tự động (OMF) và các kịch bản tạo Tablespace chuẩn xác dùng cho lưu trữ dữ liệu, Index, phân mảnh theo năm và lưu trữ file LOB.
+Tài liệu này hướng dẫn cách kiểm tra cấu hình lưu trữ tự động (OMF), phân quyền và các kịch bản tạo Tablespace chuẩn xác dùng cho lưu trữ dữ liệu, Index, phân mảnh theo năm và lưu trữ file LOB.
 
 ---
 
@@ -42,7 +42,7 @@ ALTER SESSION SET CONTAINER = PDB1;
 GRANT CREATE TABLESPACE TO c##admin;
 ```
 
-### 1.3. Bước 3: Thực thi tạo Tablespace
+### 1.3. Bước 3: Đăng nhập và chuẩn bị tạo Tablespace
 > [!WARNING]
 > Common User có quyền di chuyển tự do giữa các Container. **Tuyệt đối không quên** chuyển phiên làm việc vào đúng PDB trước khi chạy lệnh tạo để tránh tạo nhầm Tablespace vào `CDB$ROOT`.
 
@@ -50,9 +50,6 @@ GRANT CREATE TABLESPACE TO c##admin;
 -- Đăng nhập bằng tài khoản Common User (VD: c##admin)
 -- 1. Chuyển vào PDB đích
 ALTER SESSION SET CONTAINER = PDB1;
-
--- 2. Thực thi lệnh tạo Tablespace (Ví dụ hệ thống có OMF)
-CREATE TABLESPACE DATA_NEW DATAFILE SIZE 10M AUTOEXTEND ON NEXT 10M MAXSIZE UNLIMITED;
 ```
 
 ---
@@ -78,7 +75,7 @@ WHERE name = 'db_create_file_dest';
 ## 3. Tạo Tablespace KHI ĐÃ BẬT OMF (Khuyên dùng)
 
 > [!IMPORTANT]
-> **Vị trí thực thi (Rất quan trọng):** Bạn **BẮT BUỘC** phải chuyển phiên làm việc vào trong PDB (Ví dụ: `ALTER SESSION SET CONTAINER = pdb1;`) trước khi chạy lệnh `CREATE TABLESPACE`. Tuyệt đối không tạo Tablespace dữ liệu nghiệp vụ ở ngoài `CDB$ROOT` để tránh làm rác và phá vỡ kiến trúc lõi của hệ thống.
+> **Vị trí thực thi (Rất quan trọng):** Đảm bảo bạn đã chuyển phiên làm việc vào trong PDB (như Mục 1.3). Tuyệt đối không tạo Tablespace dữ liệu nghiệp vụ ở ngoài `CDB$ROOT` để tránh làm rác và phá vỡ kiến trúc lõi của hệ thống.
 
 Khi hệ thống đã có OMF, Oracle sẽ tự động sinh tên file (`.dbf`) và đặt đúng vào thư mục quy định. Câu lệnh tạo Tablespace sẽ vô cùng ngắn gọn.
 
@@ -171,7 +168,34 @@ AUTOEXTEND ON NEXT 10M MAXSIZE UNLIMITED;
 
 ---
 
-## 5. Các tham số nâng cao (Mở rộng)
+## 5. Kiểm tra trạng thái và file vật lý của Tablespace
+
+Sau khi chạy lệnh tạo ở Mục 3 hoặc Mục 4, bạn nên chạy các lệnh sau (tại PDB hiện hành) để xác nhận Tablespace đã tạo thành công và cấu hình chuẩn xác chưa.
+
+### 5.1. Kiểm tra danh sách Tablespace
+```sql
+-- Xem danh sách Tablespace và trạng thái (Cần thấy trạng thái ONLINE)
+SELECT tablespace_name, status, contents 
+FROM dba_tablespaces
+ORDER BY tablespace_name;
+```
+
+### 5.2. Kiểm tra chi tiết Datafile của Tablespace (Quan trọng)
+```sql
+-- Xem chính xác vị trí lưu file (.dbf), dung lượng và chế độ AUTOEXTEND
+SELECT 
+    tablespace_name, 
+    file_name, 
+    bytes/1024/1024 AS size_mb, 
+    autoextensible, 
+    maxbytes/1024/1024 AS max_size_mb 
+FROM dba_data_files 
+ORDER BY tablespace_name;
+```
+
+---
+
+## 6. Các tham số nâng cao (Mở rộng)
 
 - `SIZE 10M`: Khởi tạo file cứng với dung lượng ban đầu là 10 Megabytes.
 - `AUTOEXTEND ON`: Cho phép file tự phình to ra khi hết chỗ chứa.
