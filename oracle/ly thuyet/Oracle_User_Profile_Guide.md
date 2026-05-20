@@ -204,3 +204,113 @@ SELECT grantee, granted_role FROM dba_role_privs WHERE grantee = 'TUPT';
 -- xem User đã có quyền này chưa, ta phải tra cứu các quyền được gán TRỰC TIẾP cho User:
 SELECT grantee, privilege FROM dba_sys_privs WHERE grantee = 'TUPT';
 ```
+
+---
+
+## 6. Phân tích và Thu hồi quyền (Privilege Analysis)
+
+Trong quá trình vận hành, để đảm bảo nguyên tắc "Đặc quyền tối thiểu" (Least Privilege), DBA cần phân tích xem một user có được cấp thừa quyền hay không. Dưới đây là kịch bản sử dụng một **Common User (`c##tupt`)** để phân tích và thu hồi quyền dư thừa cho **Local User (`tupt`)** nằm bên trong PDB.
+
+*(Lưu ý: Bạn hoàn toàn có thể dùng Common User để quản lý Local User. Cách làm là cấp quyền cho Common User trên toàn hệ thống, sau đó chuyển phiên làm việc vào PDB cụ thể để chạy công cụ phân tích).*
+
+### Bước 1: Kiểm tra, cấp quyền CAPTURE_ADMIN và trỏ vào PDB
+
+> [!TIP]
+> **Cấp quyền Cục bộ (Local Grant) cho Common User:** Thay vì cấp quyền `CAPTURE_ADMIN` trên toàn hệ thống (Root), bạn có thể nhảy thẳng vào PDB và cấp quyền cục bộ (không dùng `CONTAINER = ALL`). Cách này bảo mật hơn, tuân thủ nguyên tắc "Đặc quyền tối thiểu" vì User `c##tupt` sẽ chỉ có quyền chạy phân tích bên trong đúng PDB đó mà không thể nhòm ngó các PDB khác.
+
+Bạn có thể chọn 1 trong 2 cách sau để thực hiện:
+
+**Cách 1: Cấp quyền cục bộ (Khuyên dùng - Đứng tại PDB)**
+```sql
+-- 1.1 Nhảy ngay vào PDB1
+ALTER SESSION SET CONTAINER = pdb1;
+
+-- 1.2 (Đứng tại PDB1 bằng SYS) Kiểm tra xem c##tupt đã có quyền cục bộ chưa
+SELECT grantee, granted_role FROM dba_role_privs 
+WHERE granted_role = 'CAPTURE_ADMIN' AND grantee = 'C##TUPT';
+
+-- 1.3 Cấp quyền cục bộ (Lệnh ngắn gọn, KHÔNG có chữ CONTAINER=ALL)
+GRANT CAPTURE_ADMIN TO c##tupt;
+```
+
+**Cách 2: Cấp quyền toàn hệ thống (Đứng tại ROOT)**
+```sql
+-- 1.1 (Đứng tại CDB$ROOT bằng SYS) Kiểm tra xem c##tupt đã có quyền chưa
+SELECT grantee, granted_role FROM dba_role_privs 
+WHERE granted_role = 'CAPTURE_ADMIN' AND grantee = 'C##TUPT';
+
+-- 1.2 Cấp quyền trên toàn hệ thống
+GRANT CAPTURE_ADMIN TO c##tupt CONTAINER = ALL;
+
+-- 1.3 Nhảy vào PDB1 để chuẩn bị làm việc với Local User tupt
+ALTER SESSION SET CONTAINER = pdb1;
+```
+
+### Bước 2: Tạo Policy phân tích riêng cho Local User `tupt`
+*(Từ bước này trở đi, bạn sử dụng user `c##tupt` đã kết nối vào PDB1 để chạy lệnh)*
+```sql
+BEGIN
+  DBMS_PRIVILEGE_CAPTURE.CREATE_CAPTURE(
+    name        => 'capture_local_tupt',
+    description => 'Theo doi cac quyen cua local user tupt',
+    type        => DBMS_PRIVILEGE_CAPTURE.G_CONTEXT,
+    condition   => 'SYS_CONTEXT(''USERENV'', ''SESSION_USER'') = ''TUPT'''
+  );
+END;
+/
+```
+
+### Bước 3: Kích hoạt Policy (Bắt đầu theo dõi)
+*Hệ thống cần chạy đủ lâu (vài ngày/vài tuần) để bắt được toàn bộ chu kỳ hoạt động của ứng dụng.*
+```sql
+BEGIN
+  DBMS_PRIVILEGE_CAPTURE.ENABLE_CAPTURE('capture_local_tupt');
+END;
+/
+```
+
+### Bước 4: Vô hiệu hóa Policy và Tổng hợp dữ liệu
+Sau khi chốt thời gian theo dõi:
+```sql
+-- Tắt theo dõi
+BEGIN
+  DBMS_PRIVILEGE_CAPTURE.DISABLE_CAPTURE('capture_local_tupt');
+END;
+/
+
+-- Tổng hợp dữ liệu báo cáo
+BEGIN
+  DBMS_PRIVILEGE_CAPTURE.GENERATE_RESULT('capture_local_tupt');
+END;
+/
+```
+
+### Bước 5: Truy vấn các quyền ĐANG CÓ nhưng KHÔNG SỬ DỤNG
+```sql
+-- 1. Xem các quyền hệ thống (System Privileges) dư thừa
+SELECT SYS_PRIV, ROLENAME 
+FROM DBA_UNUSED_SYSPRIVS 
+WHERE CAPTURE = 'capture_local_tupt' AND USERNAME = 'TUPT';
+
+-- 2. Xem các quyền tác động lên bảng/view (Object Privileges) dư thừa
+SELECT OBJECT_OWNER, OBJECT_NAME, OBJECT_TYPE, OBJ_PRIV, ROLENAME
+FROM DBA_UNUSED_OBJPRIVS 
+WHERE CAPTURE = 'capture_local_tupt' AND USERNAME = 'TUPT';
+```
+
+### Bước 6: Thu hồi quyền dư thừa và dọn dẹp
+Giả sử từ kết quả Bước 5, ta phát hiện `tupt` chưa bao giờ sử dụng quyền SELECT ANY TABLE (được cấp từ `test_role` ở mục 5.2).
+
+```sql
+-- Thu hồi quyền từ Role (vì quyền này được gán thông qua test_role)
+REVOKE SELECT ANY TABLE FROM test_role;
+
+-- Hoặc nếu đó là quyền gán trực tiếp, ví dụ:
+-- REVOKE DELETE ON HR.EMPLOYEES FROM tupt;
+
+-- Xóa policy để giải phóng tài nguyên
+BEGIN
+  DBMS_PRIVILEGE_CAPTURE.DROP_CAPTURE('capture_local_tupt');
+END;
+/
+```
