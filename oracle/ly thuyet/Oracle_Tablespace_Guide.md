@@ -182,12 +182,13 @@ ORDER BY tablespace_name;
 
 ### 5.2. Kiểm tra chi tiết Datafile của Tablespace (Quan trọng)
 ```sql
--- Xem chính xác vị trí lưu file (.dbf), dung lượng và chế độ AUTOEXTEND
+-- Xem vị trí lưu file (.dbf), dung lượng, chế độ AUTOEXTEND và bước nhảy
 SELECT 
     tablespace_name, 
     file_name, 
     bytes/1024/1024 AS size_mb, 
     autoextensible, 
+    (increment_by * (bytes/blocks) / 1024 / 1024) AS next_extent_mb,
     maxbytes/1024/1024 AS max_size_mb 
 FROM dba_data_files 
 ORDER BY tablespace_name;
@@ -201,3 +202,63 @@ ORDER BY tablespace_name;
 - `AUTOEXTEND ON`: Cho phép file tự phình to ra khi hết chỗ chứa.
 - `NEXT 10M`: Mỗi lần hết chỗ, file sẽ xin hệ điều hành cấp thêm đúng 10 Megabytes. (Với các hệ thống lớn, nên set NEXT lớn hơn, ví dụ `100M` hoặc `500M` để tránh rớt hiệu năng IO do ổ cứng phải cấp phát liên tục).
 - `MAXSIZE UNLIMITED`: Cho phép file phình to mãi mãi cho đến khi đầy dung lượng vật lý của ổ cứng.
+
+---
+
+## 7. Chỉnh sửa kích thước Datafile (Resize / Autoextend)
+
+Trong quá trình vận hành, đôi khi DBA cần chủ động tăng dung lượng của một Datafile hoặc thay đổi tốc độ giãn nở của nó. Oracle quy định lệnh `ALTER` chỉ chạy được trên từng file một và phải sử dụng đường dẫn tuyệt đối (lấy từ cột `FILE_NAME` ở Mục 5.2).
+
+Tùy vào số lượng file cần xử lý, bạn có thể chọn một trong các cách sau:
+
+### 7.1. Cách 1: Làm thủ công (Dành cho 1-2 file)
+
+> [!TIP]
+> **Mẹo đối với hệ thống dùng OMF:** Do tên file sinh tự động rất dài, bạn nên gõ sẵn cú pháp `ALTER DATABASE DATAFILE '' ...`, sau đó copy đường dẫn từ kết quả truy vấn ở Mục 5.2 và dán (paste) vào giữa cặp dấu nháy đơn để tránh gõ sai chính tả.
+
+```sql
+-- Đảm bảo bạn đang đứng đúng ở PDB chứa Tablespace đó
+-- Lệnh Thay đổi (Resize) dung lượng của datafile lên thành 20MB
+ALTER DATABASE DATAFILE '/đường/dẫn/thực/tế/của/file.dbf' RESIZE 20M;
+
+-- Lệnh Cấu hình lại chế độ Autoextend: mỗi lần đầy tăng thêm 20MB, max không giới hạn
+ALTER DATABASE DATAFILE '/đường/dẫn/thực/tế/của/file.dbf' AUTOEXTEND ON NEXT 20M MAXSIZE UNLIMITED;
+```
+
+### 7.2. Cách 2: Làm tự động hàng loạt bằng PL/SQL (Khuyên dùng cho nhiều file)
+
+> [!CAUTION]
+> Các Tablespace hệ thống lõi (SYSTEM, SYSAUX, UNDOTBS1) thường có dung lượng mặc định rất lớn (>100MB). **TUYỆT ĐỐI KHÔNG** được gộp chung chúng vào lệnh Resize xuống 20MB vì sẽ làm sập Database. Vòng lặp dưới đây đã cài sẵn điều kiện `NOT IN` để loại trừ các file này.
+
+Copy đoạn mã PL/SQL dưới đây chạy trực tiếp để áp dụng thay đổi cho tất cả các file do người dùng tạo ra:
+
+```sql
+BEGIN
+  -- Lọc lấy danh sách file, LOẠI TRỪ các tablespace hệ thống
+  FOR df IN (
+      SELECT file_name 
+      FROM dba_data_files 
+      WHERE tablespace_name NOT IN ('SYSTEM', 'SYSAUX', 'UNDOTBS1', 'USERS')
+  ) 
+  LOOP
+    -- Tự động chạy lệnh Resize
+    EXECUTE IMMEDIATE 'ALTER DATABASE DATAFILE ''' || df.file_name || ''' RESIZE 20M';
+    
+    -- Tự động chạy lệnh Autoextend
+    EXECUTE IMMEDIATE 'ALTER DATABASE DATAFILE ''' || df.file_name || ''' AUTOEXTEND ON NEXT 20M MAXSIZE UNLIMITED';
+  END LOOP;
+END;
+/
+```
+
+### 7.3. Cách 3: Dùng Dynamic SQL (Sinh ra câu lệnh)
+
+Nếu bạn muốn tạo ra một danh sách các câu lệnh `ALTER` để kiểm tra bằng mắt trước khi chạy thật, hãy dùng câu lệnh `SELECT` sau:
+
+```sql
+SELECT 'ALTER DATABASE DATAFILE ''' || file_name || ''' RESIZE 20M; ' || CHR(10) ||
+       'ALTER DATABASE DATAFILE ''' || file_name || ''' AUTOEXTEND ON NEXT 20M MAXSIZE UNLIMITED;' AS script_can_chay
+FROM dba_data_files
+WHERE tablespace_name NOT IN ('SYSTEM', 'SYSAUX', 'UNDOTBS1', 'USERS');
+```
+*Kết quả trả về sẽ là các câu lệnh SQL hoàn chỉnh. Bạn chỉ việc copy kết quả đó và dán vào tab chạy lệnh mới.*
