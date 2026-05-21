@@ -81,6 +81,9 @@ Khi hệ thống đã có OMF, Oracle sẽ tự động sinh tên file (`.dbf`) 
 
 Dưới đây là kịch bản tạo 10 Tablespace tiêu chuẩn (Dung lượng ban đầu 10MB, tự động mở rộng thêm 10MB và không giới hạn dung lượng tối đa):
 
+> [!NOTE]
+> **Ghi chú về `MAXSIZE UNLIMITED`:** Các script dưới đây sử dụng `MAXSIZE UNLIMITED` theo yêu cầu của bài tập/lab để đơn giản hóa quá trình test. Tuy nhiên, trong môi trường vận hành thực tế (Production), bạn nên giới hạn MAXSIZE bằng một con số cụ thể (VD: `MAXSIZE 32G`) để tránh rủi ro lỗi ứng dụng làm đầy tràn ổ cứng vật lý.
+
 ```sql
 -- 1. Tablespace lưu dữ liệu chung
 CREATE TABLESPACE DATA DATAFILE SIZE 10M AUTOEXTEND ON NEXT 10M MAXSIZE UNLIMITED;
