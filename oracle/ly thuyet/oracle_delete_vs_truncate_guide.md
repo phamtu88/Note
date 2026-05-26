@@ -49,30 +49,46 @@ COMMIT;
 
 ## 3. Xóa dữ liệu bằng lệnh TRUNCATE
 
-Lệnh `TRUNCATE` mạnh mẽ hơn `DELETE` rất nhiều trong việc xử lý không gian lưu trữ. Có 4 tùy chọn khi sử dụng TRUNCATE tác động trực tiếp đến dung lượng:
+Lệnh `TRUNCATE` mạnh mẽ hơn `DELETE` rất nhiều trong việc xử lý không gian lưu trữ. Dưới đây là các tùy chọn khi sử dụng `TRUNCATE` tác động trực tiếp đến dung lượng:
 
 ### 3.1. TRUNCATE TABLE ... REUSE STORAGE
 - **Tác dụng:** Xóa toàn bộ dữ liệu, hạ mốc HWM về mức ban đầu, nhưng **giữ lại toàn bộ không gian vật lý** đang chiếm dụng.
-- **Khi nào dùng:** Khi bạn muốn xóa bảng để ngay lập tức `INSERT` lại một lượng dữ liệu khổng lồ tương đương. Việc giữ lại không gian giúp Oracle không tốn thời gian đi cấp phát lại ổ cứng.
+- **Khi nào dùng:** Khi bạn muốn làm trống bảng để ngay lập tức `INSERT` lại một lượng dữ liệu khổng lồ tương tự. Việc giữ lại không gian giúp Oracle không tốn thời gian đi cấp phát lại ổ đĩa vật lý (Extents).
 - **Ví dụ:**
   ```sql
-  TRUNCATE TABLE data_big REUSE STORAGE;
+  TRUNCATE TABLE c##tupt.data_test REUSE STORAGE;
   ```
 
 ### 3.2. TRUNCATE TABLE ... DROP STORAGE (Mặc định)
-- **Tác dụng:** Xóa dữ liệu, hạ HWM và **giải phóng tất cả không gian phía trên mức khởi tạo (MINEXTENTS)** trả về cho Tablespace.
-- **Lưu ý:** Nếu bạn chỉ gõ `TRUNCATE TABLE ten_bang;`, Oracle sẽ ngầm hiểu là bạn đang dùng `DROP STORAGE`.
+- **Tác dụng:** Xóa dữ liệu, hạ HWM và **giải phóng tất cả không gian phía trên mức khởi tạo (MINEXTENTS / INITIAL extent)** trả về cho Tablespace.
+- **Lưu ý:** Nếu bạn chỉ gõ `TRUNCATE TABLE ten_bang;`, Oracle sẽ ngầm hiểu là bạn đang dùng tùy chọn mặc định `DROP STORAGE`.
+- **Ví dụ:**
+  ```sql
+  TRUNCATE TABLE c##tupt.data_test; 
+  -- Tương đương với: TRUNCATE TABLE c##tupt.data_test DROP STORAGE;
+  ```
 
-### 3.3. Sự cố: Truncate xong nhưng không giảm dung lượng
-- **Nguyên nhân:** Đôi khi bạn Truncate (mặc định) nhưng dung lượng không giảm. Lý do là lúc tạo bảng, tham số `INITIAL` hoặc `MINEXTENTS` được thiết lập quá lớn (ví dụ `INITIAL 100M`). Tùy chọn `DROP STORAGE` không thể thu hồi phần không gian khởi tạo này.
-- **Cách xử lý thủ công:** Export dữ liệu (Data Pump) -> `DROP TABLE` -> Tạo lại bảng với `INITIAL` nhỏ hơn -> Import lại.
+### 3.3. Sự cố thường gặp: Truncate xong nhưng dung lượng vẫn lớn
+- **Nguyên nhân:** Khi tạo bảng, nếu tham số khởi tạo dung lượng `INITIAL` được thiết lập quá lớn (ví dụ: `CREATE TABLE ... STORAGE (INITIAL 100M)`), Oracle sẽ xí trước 100MB ổ đĩa. Tùy chọn mặc định `DROP STORAGE` **không thể thu hồi** phần dung lượng khởi tạo này (dung lượng bảng sau khi Truncate vẫn giữ nguyên ở mức 100MB dù bảng trống rỗng).
+- **Cách xử lý truyền thống:** Phải Export dữ liệu -> `DROP TABLE` -> Tạo lại bảng với `INITIAL` nhỏ hơn -> Import lại (rất mất thời gian).
+- **Giải pháp hiện đại:** Sử dụng tùy chọn `DROP ALL STORAGE` (Xem mục 3.4 bên dưới).
 
 ### 3.4. TRUNCATE TABLE ... DROP ALL STORAGE (Giải pháp triệt để)
-- **Tác dụng:** Xóa dữ liệu và **giải phóng TẤT CẢ không gian** được phân bổ cho bảng (bất chấp cả thông số MINEXTENTS). Bảng sẽ trở về dung lượng 0 thực sự.
-- **Ví dụ thực tế:** Khi bạn muốn tiêu diệt hoàn toàn bảng `DATA_BIG` (304MB) để lấy lại 100% dung lượng ổ cứng một cách nhanh gọn:
+- **Tác dụng:** Xóa dữ liệu và **giải phóng 100% dung lượng** cấp phát cho bảng, bất chấp tham số `INITIAL` hay `MINEXTENTS` của bảng. Dung lượng bảng sẽ thực sự trở về **0 bytes** (Segment của bảng tạm thời bị xóa khỏi ổ đĩa cho đến khi có dữ liệu mới được chèn vào - nhờ tính năng *Deferred Segment Creation*).
+- **Ví dụ thực tế:** Khi muốn giải phóng hoàn toàn dung lượng ổ cứng của bảng `data_test`:
   ```sql
-  TRUNCATE TABLE data_big DROP ALL STORAGE;
+  TRUNCATE TABLE c##tupt.data_test DROP ALL STORAGE;
   ```
+
+### 3.5. So sánh trực quan: DROP STORAGE (Mặc định) vs DROP ALL STORAGE
+
+| Tiêu chí | `DROP STORAGE` (Mặc định) | `DROP ALL STORAGE` |
+| :--- | :--- | :--- |
+| **Xóa dữ liệu & Hạ HWM** | Có | Có |
+| **Giải phóng Extents phụ** | Có (Thu hồi các extents phát sinh thêm). | Có |
+| **Giải phóng Extent khởi tạo** | **KHÔNG** (Giữ lại dung lượng tối thiểu ban đầu `INITIAL`). | **CÓ** (Giải phóng toàn bộ 100%, đưa bảng về 0 bytes). |
+| **Dung lượng sau lệnh** | Bằng kích thước `INITIAL` (Ví dụ: 100MB nếu cấu hình ban đầu là 100MB). | **Bằng 0 bytes** (Không còn segment chiếm đĩa). |
+| **Khi nào dùng** | Khi dung lượng khởi tạo (`INITIAL`) nhỏ hoặc muốn giữ nguyên dung lượng ban đầu để nạp tiếp. | Khi dung lượng khởi tạo (`INITIAL`) quá lớn hoặc muốn dọn dẹp sạch sẽ 100% bộ nhớ. |
 
 ---
 
