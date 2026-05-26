@@ -76,7 +76,64 @@ Lệnh `TRUNCATE` mạnh mẽ hơn `DELETE` rất nhiều trong việc xử lý 
 
 ---
 
-## 4. Phụ lục: Bài tập thực hành tổng hợp (Lab Exercise)
+## 4. Các câu lệnh kiểm tra dung lượng và số lượng bảng thực chiến
+
+Để quản lý tốt dung lượng và giám sát hiệu quả các thao tác DELETE/TRUNCATE, dưới đây là các câu lệnh kiểm tra không thể thiếu trong túi đồ của một DBA hoặc Developer.
+
+### 4.1. Kiểm tra số lượng bảng đang tồn tại
+Tùy vào quyền hạn của bạn và phạm vi cần quét:
+*   **Đếm số bảng thuộc sở hữu của User hiện tại:**
+    ```sql
+    SELECT COUNT(*) FROM USER_TABLES;
+    ```
+*   **Đếm số bảng mà User hiện tại có quyền truy cập:**
+    ```sql
+    SELECT COUNT(*) FROM ALL_TABLES;
+    ```
+*   **Đếm toàn bộ số bảng trong toàn hệ thống Database (Yêu cầu quyền DBA):**
+    ```sql
+    SELECT OWNER, COUNT(*) FROM DBA_TABLES GROUP BY OWNER ORDER BY COUNT(*) DESC;
+    ```
+*   **Đếm số bảng trong toàn bộ môi trường Multitenant (CDB/PDB):**
+    ```sql
+    SELECT CON_ID, COUNT(*) FROM CDB_TABLES GROUP BY CON_ID;
+    ```
+
+### 4.2. Kiểm tra dung lượng vật lý và xác định Schema sở hữu
+Khi có các bảng trùng tên nhau nằm ở nhiều tablespace khác nhau (như trường hợp bảng `DATA_BIG` nằm ở cả `SYSTEM` và `USERS`), sử dụng câu lệnh tích hợp cả thông tin **Chủ sở hữu (Owner)** và **Số lượng Block** để kiểm soát dung lượng một cách an toàn và chi tiết nhất:
+```sql
+SELECT owner, segment_name, tablespace_name, segment_type, ROUND(bytes / 1024 / 1024, 2) AS size_mb, blocks
+FROM dba_segments 
+WHERE segment_name = 'DATA_BIG';
+```
+*   **Cột `owner`:** Giúp xác định ai tạo bảng để tránh xóa nhầm dữ liệu (ví dụ: `SYS` tạo nhầm trong tablespace `SYSTEM`).
+*   **Cột `blocks`:** Số lượng block vật lý đang cấp phát cho bảng, hữu dụng để đánh giá độ phình của HWM.
+
+### 4.3. Kiểm tra số dòng logic (`SELECT COUNT(*)`) và bẫy hiệu năng
+Sau khi thực hiện xóa dữ liệu, câu lệnh đếm số dòng logic sẽ cho kết quả giống nhau nhưng có sự khác biệt khổng lồ về hiệu năng:
+```sql
+SELECT COUNT(*) FROM data_big;
+```
+*   **Nếu vừa dùng `DELETE`:** Kết quả trả về `0` nhưng tốc độ chạy **rất chậm (Full Table Scan)** vì Oracle vẫn phải quét toàn bộ các block dữ liệu cũ cho đến mốc HWM.
+*   **Nếu vừa dùng `TRUNCATE`:** Kết quả trả về `0` chạy **tức thời** vì HWM đã được reset về 0, Oracle không cần đọc bất kỳ block dữ liệu cũ nào.
+
+### 4.4. Xóa vĩnh viễn bảng để thu hồi dung lượng tức thì (DROP TABLE ... PURGE)
+Khi bạn muốn loại bỏ hoàn toàn một bảng khỏi database (ví dụ bảng rác `DATA_BIG` trong tablespace `SYSTEM`), lệnh `DROP TABLE` thông thường sẽ đưa bảng vào Recycle Bin (Thùng rác) và **chưa giải phóng** dung lượng vật lý trên đĩa.
+
+*   **Cú pháp an toàn (có chỉ định rõ Owner và từ khóa PURGE):**
+    ```sql
+    DROP TABLE owner.table_name PURGE;
+    ```
+    *Ví dụ thực tế để giải phóng 304MB khỏi tablespace SYSTEM:*
+    ```sql
+    DROP TABLE SYS.DATA_BIG PURGE;
+    ```
+*   **Tác dụng của `PURGE`:** Bỏ qua Recycle Bin, xóa vĩnh viễn bảng và hoàn trả toàn bộ dung lượng vật lý ngay lập tức về cho Tablespace.
+*   *Lưu ý đặc biệt với tài khoản `SYS`:* Đối với tài khoản `SYS`, Oracle không sử dụng Recycle Bin (các bảng thuộc `SYS` khi DROP luôn bị xóa vĩnh viễn), nhưng sử dụng thêm từ khóa `PURGE` vẫn là một thói quen thực hành an toàn và chuẩn mực.
+
+---
+
+## 5. Phụ lục: Bài tập thực hành tổng hợp (Lab Exercise)
 
 Dưới đây là kịch bản thực hành xuyên suốt toàn bộ các kỹ thuật quản lý dung lượng trên, được xây dựng trực tiếp từ các yêu cầu bài tập thực tế.
 
