@@ -147,6 +147,40 @@ Khi bạn muốn loại bỏ hoàn toàn một bảng khỏi database (ví dụ 
 *   **Tác dụng của `PURGE`:** Bỏ qua Recycle Bin, xóa vĩnh viễn bảng và hoàn trả toàn bộ dung lượng vật lý ngay lập tức về cho Tablespace.
 *   *Lưu ý đặc biệt với tài khoản `SYS`:* Đối với tài khoản `SYS`, Oracle không sử dụng Recycle Bin (các bảng thuộc `SYS` khi DROP luôn bị xóa vĩnh viễn), nhưng sử dụng thêm từ khóa `PURGE` vẫn là một thói quen thực hành an toàn và chuẩn mực.
 
+### 4.5. Phân biệt Siêu dữ liệu (Metadata) và Phân đoạn vật lý (Segment) sau TRUNCATE
+Khi thực hiện lệnh `TRUNCATE TABLE c##tupt.my_table DROP ALL STORAGE;`, ta sẽ thấy một hiện tượng thú vị:
+*   **Lệnh truy vấn `DBA_SEGMENTS` trả về kết quả rỗng:** Do tùy chọn `DROP ALL STORAGE` đã giải phóng 100% dung lượng vật lý và xóa bỏ phân đoạn (Segment) của bảng đó khỏi đĩa cứng.
+*   **Lệnh truy vấn `USER_TABLES` vẫn hiển thị thông tin bảng:** Vì bảng chỉ bị làm rỗng chứ chưa bị xóa (`DROP TABLE`), cấu trúc logic của bảng vẫn tồn tại trong từ điển dữ liệu để sẵn sàng nhận dữ liệu mới.
+*   **Các thông số `num_rows` và `blocks` trong `USER_TABLES` vẫn giữ số liệu cũ (Stale Statistics):** Các cột này là thông số tĩnh của Optimizer (Optimizer Statistics) và không tự động cập nhật thời gian thực sau khi TRUNCATE. 
+    *   *Cách cập nhật lại thông số chính xác về 0:*
+        ```sql
+        EXEC DBMS_STATS.GATHER_TABLE_STATS('C##TUPT', 'MY_TABLE');
+        ```
+
+### 4.6. Cơ chế và Chính sách lưu trữ của Recycle Bin (Thùng rác)
+Ngoại trừ tài khoản `SYS`, khi chạy lệnh `DROP TABLE table_name;` thông thường, đối tượng sẽ được đưa vào Recycle Bin (Thùng rác hệ thống):
+*   **Cơ chế đổi tên:** Oracle sẽ đổi tên bảng thành một tên ngẫu nhiên do hệ thống quản lý dạng `BIN$xxxx==$0`. Do đó các câu lệnh kiểm tra thông thường tìm theo tên cũ sẽ không trả về kết quả.
+*   **Chính sách lưu trữ (Retention Policy):**
+    *   **Không giới hạn thời gian (Time-based):** Thùng rác Oracle không tự động xóa file sau một khoảng thời gian cố định (như 30 ngày).
+    *   **Xóa tự động theo Áp lực dung lượng (Space Pressure):** Các đối tượng trong thùng rác sẽ nằm đó vô thời hạn cho đến khi Tablespace chứa nó bị hết dung lượng trống. Lúc đó, Oracle sẽ tự động thực hiện xóa vĩnh viễn (Purge) các đối tượng trong thùng rác theo nguyên tắc **FIFO (First In, First Out - đối tượng cũ nhất xóa trước)** để giải phóng không gian cho dữ liệu mới.
+*   **Các câu lệnh quản trị Recycle Bin thực chiến:**
+    *   *Kiểm tra các đối tượng trong thùng rác:*
+        ```sql
+        SELECT object_name, original_name, operation, type FROM user_recyclebin;
+        ```
+    *   *Khôi phục (Hồi sinh) bảng đã xóa:*
+        ```sql
+        FLASHBACK TABLE c##tupt.my_table TO BEFORE DROP;
+        ```
+    *   *Chủ động dọn sạch hoàn toàn thùng rác:*
+        ```sql
+        PURGE RECYCLEBIN;
+        ```
+    *   *Xóa vĩnh viễn bảng ngay lập tức khi DROP (không qua thùng rác):*
+        ```sql
+        DROP TABLE c##tupt.my_table PURGE;
+        ```
+
 ---
 
 ## 5. Phụ lục: Bài tập thực hành tổng hợp (Lab Exercise)
