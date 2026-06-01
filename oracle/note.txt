@@ -1,0 +1,11 @@
+Khi DBA cũ nghỉ việc
+Câu chuyện không của riêng ai, khi tiếp nhận lại database từ đồng nghiệp đang chuẩn bị nghỉ việc
+Vào kiểm tra dung lượng diskgroup 42Tb nhưng free chỉ còn 179Gb, nỗi buồn không mang tên
+Dịch vụ vẫn chạy 24/24 không được phép dừng, nên hãy bắt tay ngay vào việc
+Rà soát, tìm hiểu về nghiệp vụ
+Liệt kê những bảng đang có dung lượng lớn nhất (top 100 bảng)
+Liên hệ Dev xem bảng nào có thể truncate, drop luôn được không?
+Bảng nào có thể archive partition cũ ra bên ngoài database?
+Có được thông tin từ Dev tiến hành export partition cũ
+Drop các partition cũ đã được export
+Resize co lại dung lượng datafile
