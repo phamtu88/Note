@@ -310,6 +310,20 @@ Gọi Universal Installer để khởi chạy bộ GUI OUI ra xử lý quá trì
 
 *   **Bước 8 (Configuration Options):** 
     - **Memory:** Nên tích `Enable Automatic Memory Management` để Oracle tự chia RAM thông minh cho bạn.
+        - *📌 Note nâng cao (Nếu cấu hình thủ công - Bỏ tích AMM):* 
+          - **Tổng RAM cho Oracle:** Dành khoảng 70% - 80% RAM vật lý của server, còn lại để cho OS.
+          - **Chia tỷ lệ (SGA/PGA):**
+            - Hệ thống OLTP (Web, ERP, App bán hàng...): Cần SGA lớn để cache dữ liệu. Tỷ lệ chuẩn: **SGA = 80%, PGA = 20%**.
+            - Hệ thống OLAP/Data Warehouse (Báo cáo, phân tích): Cần PGA lớn để xử lý Join, Sort. Tỷ lệ chuẩn: **SGA = 50-60%, PGA = 40-50%**.
+          - **Ảnh hưởng của CCU (Concurrent Users) tới PGA:** 
+            - Mỗi session kết nối ngốn khoảng 2MB - 5MB PGA.
+            - *Công thức:* `PGA tối thiểu = (Số CCU thực tế * 3MB) + (Dung lượng dự phòng cho các truy vấn nặng)`.
+            - *Lưu ý:* Nếu ứng dụng mở hàng nghìn connection trực tiếp (VD: 1000 CCU) sẽ ngốn ~3GB PGA chỉ để duy trì kết nối. Hãy luôn sử dụng **Connection Pooling** (HikariCP, WebLogic...) ở tầng App để giới hạn số kết nối thực (50-200), giúp tiết kiệm khổng lồ RAM PGA và tránh lỗi `ORA-04030` (Out of process memory).
+          - **💡 Ví dụ thực tế:** Giả sử bạn có **Server 16GB RAM**, chạy hệ thống **App bán hàng (OLTP)** với **500 CCU** kết nối đồng thời.
+            - **Tính Tổng RAM Oracle:** `16GB * 75% = 12GB` (Chừa lại 4GB cho hệ điều hành Windows/Linux).
+            - **Chia tỷ lệ (80/20):** `SGA = 12GB * 80% = 9.6GB` và `PGA = 12GB * 20% = 2.4GB`.
+            - **Kiểm tra PGA so với CCU:** 500 CCU * 3MB/session = 1.5GB (Mức PGA tối thiểu cần có).
+            - **👉 Kết luận:** Mức PGA 2.4GB vừa tính ra là hoàn toàn an toàn để gánh 500 kết nối này. Phần dư ra 0.9GB sẽ được dùng để dự phòng lúc cần tính toán dữ liệu báo cáo cuối ngày.
     - **Character sets:** 
         - *Lựa chọn:* `AL32UTF8`.
         - *Tại sao:* Lưu được mọi ngôn ngữ (Tiếng Việt).
