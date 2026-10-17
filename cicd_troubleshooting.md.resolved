@@ -1,0 +1,1233 @@
+# 📘 Bộ Tài Liệu Troubleshooting CI/CD
+### Pipeline: GitLab Runner → ArgoCD → Kubernetes (Production)
+
+> **Phiên bản:** 1.0 | **Cập nhật:** 2026-10-17  
+> **Mục đích:** Hướng dẫn xử lý sự cố chi tiết cho toàn bộ vòng đời CI/CD từ build đến production.
+
+---
+
+## Mục Lục
+
+1. [Tầng GitLab Runner (CI)](#1-tầng-gitlab-runner-ci)
+2. [Tầng ArgoCD (CD)](#2-tầng-argocd-cd)
+3. [Tầng Kubernetes - Production](#3-tầng-kubernetes---production)
+4. [Lỗi Liên Tầng](#4-lỗi-liên-tầng)
+5. [Công Cụ Chẩn Đoán Nhanh](#5-công-cụ-chẩn-đoán-nhanh)
+
+---
+
+## 1. Tầng GitLab Runner (CI)
+
+### TS-GL-01 — Runner Offline / No Available Runners
+
+**Triệu chứng:**
+```
+This job is stuck, because the project doesn't have any runners online assigned to it.
+```
+
+**Nguyên nhân:**
+- GitLab Runner service bị crash hoặc stop.
+- Runner bị unregister khỏi GitLab.
+- Runner bị quá tải (hết CPU/RAM/Disk).
+
+**Chẩn đoán:**
+```bash
+# Kiểm tra trạng thái runner service
+sudo systemctl status gitlab-runner
+
+# Xem log runner realtime
+sudo journalctl -u gitlab-runner -f --no-pager
+
+# Kiểm tra danh sách runner đã đăng ký trên máy
+sudo gitlab-runner list
+
+# Kiểm tra runner có kết nối được GitLab không
+sudo gitlab-runner verify
+# Output: "Verifying runner... is alive" → OK
+# Output: "Verifying runner... is removed"  → Runner bị xóa khỏi GitLab UI
+
+# Kiểm tra tài nguyên máy chủ runner
+df -h        # Disk
+free -m      # RAM
+top          # CPU
+# Xem process nào ngốn tài nguyên
+ps aux --sort=-%cpu | head -10
+```
+
+**Khắc phục:**
+```bash
+# Khởi động lại runner
+sudo systemctl restart gitlab-runner
+
+# Bật auto-start khi server reboot
+sudo systemctl enable gitlab-runner
+
+# Nếu runner bị unregister, đăng ký lại (GitLab 15.x+ dùng --token thay --registration-token)
+sudo gitlab-runner register \
+  --url "https://gitlab.yourdomain.com/" \
+  --token "YOUR_RUNNER_TOKEN" \
+  --executor "docker" \
+  --docker-image "alpine:latest" \
+  --description "production-runner-01" \
+  --non-interactive
+
+# Xóa runner cũ không dùng
+sudo gitlab-runner unregister --name "old-runner-name"
+
+# Dọn disk nếu đầy
+docker system prune -af --volumes
+```
+
+> [!TIP]
+> **Phòng ngừa:** Cấu hình `/etc/gitlab-runner/config.toml` để runner tự giới hạn concurrency và tự dọn dẹp:
+> ```toml
+> concurrent = 4
+> [[runners]]
+>   [runners.docker]
+>     pull_policy = "if-not-present"
+>     disable_cache = false
+>   [runners.machine]
+>     IdleCount = 1        # Giữ 1 runner idle sẵn sàng
+>     MaxBuilds = 100      # Tự restart runner sau 100 builds
+> ```
+
+---
+
+### TS-GL-02 — Docker Build Failed
+
+**Triệu chứng:**
+```
+ERROR: failed to solve: failed to read dockerfile: open /builds/.../Dockerfile: no such file or directory
+```
+hoặc:
+```
+Error response from daemon: Get "https://registry-1.docker.io/...": dial tcp: i/o timeout
+```
+
+**Nguyên nhân:**
+- Dockerfile không tồn tại hoặc đường dẫn sai trong `.gitlab-ci.yml`.
+- Base image không pull được do network timeout hoặc registry down.
+- Lỗi cú pháp trong Dockerfile.
+
+**Chẩn đoán:**
+```bash
+# Test build local trước khi push
+docker build --no-cache -f ./Dockerfile -t test-image .
+
+# Lint Dockerfile để phát hiện lỗi cú pháp (cài hadolint)
+hadolint Dockerfile
+
+# Xem build context size (nếu quá lớn → build chậm)
+du -sh . --exclude=.git
+# Thêm .dockerignore để giảm context
+```
+
+**Khắc phục:**
+```yaml
+# .gitlab-ci.yml — chỉ rõ Dockerfile path + bật BuildKit
+variables:
+  DOCKER_BUILDKIT: "1"             # Bật BuildKit: build nhanh hơn, cache tốt hơn
+
+build:
+  script:
+    - docker build
+        --no-cache
+        -f docker/Dockerfile
+        --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        --build-arg GIT_COMMIT=$CI_COMMIT_SHORT_SHA
+        -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA .
+  retry:
+    max: 2
+    when: runner_system_failure    # Tự retry khi network timeout pull image
+```
+
+> [!TIP]
+> **Multi-stage build** giúp image nhỏ hơn và tránh lộ build tools:
+> ```dockerfile
+> # Stage 1: Build
+> FROM maven:3.9-openjdk-17 AS builder
+> WORKDIR /app
+> COPY pom.xml .
+> RUN mvn dependency:go-offline    # Cache dependencies trước
+> COPY src ./src
+> RUN mvn package -DskipTests
+> 
+> # Stage 2: Runtime (image nhỏ, không có Maven/JDK)
+> FROM eclipse-temurin:17-jre-alpine
+> COPY --from=builder /app/target/*.jar /app/app.jar
+> ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+> ```
+
+---
+
+### TS-GL-03 — Image Push Failed (401 / 403)
+
+**Triệu chứng:**
+```
+unauthorized: authentication required
+denied: requested access to the resource is denied
+```
+
+**Nguyên nhân:**
+- CI/CD Variable `REGISTRY_USER` / `REGISTRY_PASS` sai hoặc chưa khai báo.
+- Token registry hết hạn (Personal Access Token hoặc Deploy Token).
+- Không login vào registry trước khi push.
+- Runner không có quyền truy cập namespace trên registry.
+
+**Chẩn đoán:**
+```bash
+# Kiểm tra variables trong GitLab UI
+# Settings > CI/CD > Variables → xem có masked/protected đúng không
+
+# Test login manual từ máy runner
+docker login $CI_REGISTRY -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD
+
+# Kiểm tra token còn hạn không
+# GitLab UI > User Settings > Access Tokens → xem Expiration date
+
+# Debug biến trong job (thêm tạm vào script)
+- echo "Registry: $CI_REGISTRY"
+- echo "User: $CI_REGISTRY_USER"
+# KHÔNG in password! Chỉ check xem có rỗng không:
+- '[ -z "$CI_REGISTRY_PASSWORD" ] && echo "PASSWORD IS EMPTY" || echo "Password set"'
+```
+
+**Khắc phục:**
+```yaml
+# .gitlab-ci.yml — login trước khi push
+build_and_push:
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+  script:
+    - docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA .
+    - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+    # Thêm tag latest song song
+    - docker tag $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA $CI_REGISTRY_IMAGE:latest
+    - docker push $CI_REGISTRY_IMAGE:latest
+  after_script:
+    - docker logout $CI_REGISTRY   # Logout sau khi xong để bảo mật
+```
+
+> [!NOTE]
+> **Phân biệt loại token cho registry:**
+> | Loại Token | Phạm vi | Dùng khi |
+> |---|---|---|
+> | `$CI_REGISTRY_USER/PASSWORD` | Built-in GitLab CI, chỉ valid trong job | Đơn giản, mặc định |
+> | **Deploy Token** (`Settings > Repository > Deploy tokens`) | Tạo riêng, read/write registry | Dùng cho external system pull image |
+> | **Personal Access Token** | Toàn quyền theo user | Tránh dùng trong CI, hết hạn sẽ break pipeline |
+
+---
+
+### TS-GL-04 — Job Timeout
+
+**Triệu chứng:**
+```
+ERROR: Job failed: execution took longer than 1h0m0s seconds
+```
+
+**Nguyên nhân:**
+- Build lâu do không có cache (pull nhiều dependency).
+- Network chậm khi download packages.
+- Infinite loop trong build script.
+
+**Khắc phục:**
+```yaml
+# .gitlab-ci.yml — Tăng timeout và cache thông minh
+variables:
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2"
+
+build:
+  timeout: 2h
+  cache:
+    # Cache theo branch — key thay đổi khi deps thay đổi (pom.xml/package.json)
+    - key:
+        files:
+          - pom.xml          # Invalidate cache khi pom.xml thay đổi
+      paths:
+        - .m2/repository
+    - key:
+        files:
+          - package-lock.json
+      paths:
+        - node_modules/
+  script:
+    - mvn package -DskipTests -T 4   # Build song song 4 threads
+```
+
+> [!TIP]
+> **Tối ưu thêm với Docker layer cache:**
+> ```yaml
+> build_docker:
+>   variables:
+>     DOCKER_BUILDKIT: "1"
+>   script:
+>     # Pull image cũ để dùng làm cache layer
+>     - docker pull $CI_REGISTRY_IMAGE:latest || true
+>     - docker build
+>         --cache-from $CI_REGISTRY_IMAGE:latest
+>         -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA .
+> ```
+
+---
+
+### TS-GL-05 — Pipeline Không Trigger
+
+**Triệu chứng:**
+- Push code nhưng pipeline không chạy.
+
+**Nguyên nhân:**
+- Branch không match với rule trong `.gitlab-ci.yml`.
+- Webhook bị disabled hoặc lỗi.
+- Pipeline bị disable trong project settings.
+
+**Chẩn đoán:**
+```bash
+# 1. Kiểm tra pipeline có bị disable không
+# GitLab UI > Settings > General > Visibility, project features, permissions
+# → "CI/CD" phải được bật (Enabled)
+
+# 2. Kiểm tra file .gitlab-ci.yml có hợp lệ không
+# GitLab UI > CI/CD > Editor > Validate tab
+# Hoặc dùng API:
+curl --header "PRIVATE-TOKEN: <your_token>" \
+  "https://gitlab.example.com/api/v4/projects/<id>/ci/lint"
+
+# 3. Kiểm tra webhook GitLab → ArgoCD/external
+# GitLab UI > Settings > Webhooks > Recent Deliveries → xem response
+```
+
+**Khắc phục:**
+```yaml
+# .gitlab-ci.yml — rules linh hoạt
+build:
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^(main|develop|release\/.*)$/'
+    - if: '$CI_MERGE_REQUEST_IID'          # Chạy cho Merge Request
+    - if: '$CI_PIPELINE_SOURCE == "web"'   # Chạy khi trigger thủ công từ UI
+    - if: '$CI_PIPELINE_SOURCE == "api"'   # Chạy khi trigger qua API
+
+# Hoặc đơn giản hơn — chạy mọi commit ngoại trừ tag:
+build_always:
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never       # Không chạy khi push tag
+    - when: always      # Chạy trong mọi trường hợp khác
+```
+
+```bash
+# Test trigger pipeline thủ công qua API
+curl --request POST \
+  --form token=<TRIGGER_TOKEN> \
+  --form ref=main \
+  "https://gitlab.example.com/api/v4/projects/<PROJECT_ID>/trigger/pipeline"
+```
+
+---
+
+### TS-GL-06 — Out of Disk Space Trên Runner
+
+**Triệu chứng:**
+```
+no space left on device
+```
+
+**Chẩn đoán & Khắc phục:**
+```bash
+# Tìm thư mục ngốn disk
+df -h
+du -sh /var/lib/docker/*   # Docker layers, volumes, containers
+du -sh /home/gitlab-runner/builds/*  # Build artifacts còn đọng
+
+# Xóa Docker cache theo mức độ (từ nhẹ đến mạnh)
+docker image prune -f          # Xóa dangling images (không có tag)
+docker system prune -f         # Xóa image/container/network không dùng
+docker system prune -af        # Xóa tất cả image không dùng (cẩn thận hơn)
+docker system prune -af --volumes  # Xóa cả volume (nguy hiểm nếu có data)
+
+# Xem dung lượng chi tiết từng loại
+docker system df -v
+
+# Cài cron tự động dọn dẹp mỗi đêm 2h sáng
+(crontab -l 2>/dev/null; echo "0 2 * * * /usr/bin/docker system prune -f >> /var/log/docker-cleanup.log 2>&1") | crontab -
+```
+
+```toml
+# /etc/gitlab-runner/config.toml — cấu hình toàn diện
+concurrent = 4
+check_interval = 0
+
+[[runners]]
+  name = "production-runner"
+  executor = "docker"
+  [runners.docker]
+    image = "alpine:latest"
+    pull_policy = "if-not-present"   # Không pull lại nếu image đã có
+    disable_cache = false
+    volumes = ["/cache"]             # Cache volume dùng chung giữa các job
+    shm_size = 0
+  [runners.cache]
+    Type = "local"
+    Path = "/cache"                  # Cache path trên host
+    Shared = true                    # Dùng chung cache giữa các runner
+```
+
+> [!TIP]
+> **Dùng `.gitlab-ci.yml` để kiểm soát artifact retention, tránh tích lũy:**
+> ```yaml
+> build:
+>   artifacts:
+>     paths:
+>       - target/*.jar
+>     expire_in: 1 week   # Tự xóa artifact sau 1 tuần
+> ```
+
+---
+
+## 2. Tầng ArgoCD (CD)
+
+### TS-ARGO-01 — App OutOfSync / Sync Stuck
+
+**Triệu chứng:**
+- ArgoCD Application hiển thị `OutOfSync` hoặc sync mãi không hoàn thành.
+
+**Nguyên nhân:**
+- Webhook từ GitLab đến ArgoCD không hoạt động.
+- Có resource bị annotate bởi tool khác (Helm, kubectl apply thủ công).
+- Có field không thể so sánh (server-side fields).
+
+**Chẩn đoán:**
+```bash
+# Kiểm tra trạng thái app
+argocd app get my-app
+
+# Xem lý do diff
+argocd app diff my-app
+
+# Kiểm tra webhook
+# ArgoCD UI > Settings > Repositories > Webhooks
+```
+
+**Khắc phục:**
+```bash
+# Sync thủ công
+argocd app sync my-app
+
+# Force sync (bỏ qua conflict)
+argocd app sync my-app --force
+
+# Bật Self-Heal để tự động sync khi có drift
+argocd app set my-app --self-heal --sync-policy automated
+```
+
+```yaml
+# argocd-application.yaml — bật auto-sync và self-heal
+spec:
+  syncPolicy:
+    automated:
+      prune: true        # Xóa resource không còn trong Git
+      selfHeal: true     # Tự động fix drift
+    syncOptions:
+      - CreateNamespace=true
+```
+
+---
+
+### TS-ARGO-02 — Sync Failed — Helm / Kustomize Error
+
+**Triệu chứng:**
+```
+ComparisonError: failed to generate manifest: ...
+helm template ... error: ...
+```
+
+**Nguyên nhân:**
+- Sai cú pháp trong `values.yaml` hoặc template Helm.
+- Kustomize overlay không hợp lệ.
+- Helm chart version không tương thích.
+
+**Chẩn đoán:**
+```bash
+# Test render Helm local trước khi push
+helm template my-release ./charts/my-app -f values-prod.yaml
+
+# Lint Helm chart (kiểm tra cấu trúc và best practices)
+helm lint ./charts/my-app -f values-prod.yaml
+
+# Test Kustomize local
+kustomize build overlays/production
+
+# Validate manifest với kubeval (check schema K8s)
+helm template my-release ./charts/my-app | kubeval --strict
+
+# Validate với kubeconform (nhanh hơn kubeval, hỗ trợ CRD)
+helm template my-release ./charts/my-app | kubeconform -strict -summary
+
+# Xem ArgoCD đang render ra gì (thường duy nhất cách debug render error)
+argocd app manifests my-app
+```
+
+**Khắc phục:**
+```yaml
+# values-prod.yaml — các lỗi phổ biến và cách sửa
+replicaCount: 3
+image:
+  repository: registry.example.com/my-app
+  tag: "abc1234"          # Phải là string, không phải số (không dùng: tag: 1234)
+  pullPolicy: IfNotPresent
+
+# Lỗi phổ biến: indent sai trong Helm template
+# Template: {{ .Values.someList | toYaml | indent 4 }}
+# Thiếu indent → YAML syntax error
+```
+
+> [!TIP]
+> **Thêm bước validate vào CI pipeline để bắt lỗi trước khi ArgoCD sync:**
+> ```yaml
+> validate_helm:
+>   stage: validate
+>   script:
+>     - helm lint ./charts/my-app -f values-prod.yaml
+>     - helm template my-release ./charts/my-app -f values-prod.yaml | kubeconform -strict
+>   rules:
+>     - if: '$CI_COMMIT_BRANCH'
+>       changes:
+>         - charts/**
+>         - values*.yaml
+> ```
+
+---
+
+### TS-ARGO-03 — Permission Denied / RBAC Error
+
+**Triệu chứng:**
+```
+error creating resource: deployments.apps is forbidden: 
+User "system:serviceaccount:argocd:argocd-application-controller" 
+cannot create resource "deployments" in API group "apps" in the namespace "production"
+```
+
+**Chẩn đoán:**
+```bash
+# Kiểm tra service account ArgoCD có quyền gì
+kubectl auth can-i create deployments \
+  --as=system:serviceaccount:argocd:argocd-application-controller \
+  -n production
+
+# Liệt kê tất cả quyền hiện tại của ArgoCD service account
+kubectl auth can-i --list \
+  --as=system:serviceaccount:argocd:argocd-application-controller \
+  -n production
+```
+
+**Khắc phục:**
+```yaml
+# Cách 1: Dùng cluster-admin — đơn giản nhưng quyền rất rộng (chỉ dùng môi trường dev/test)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argocd-application-controller-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: argocd-application-controller
+  namespace: argocd
+---
+# Cách 2 (Khuyến nghị cho Production): Least-privilege role chỉ đủ quyền ArgoCD cần
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argocd-controller-role
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]          # Đọc tất cả
+  - apiGroups: ["apps", "extensions"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: [""]                           # core API group
+    resources: ["services", "configmaps", "secrets", "persistentvolumeclaims"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["create", "update", "patch", "delete"]
+```
+
+---
+
+### TS-ARGO-04 — Repository Không Kết Nối Được
+
+**Triệu chứng:**
+```
+rpc error: code = Unknown desc = error testing repository connectivity: ...
+authentication required
+```
+
+**Chẩn đoán:**
+```bash
+# Liệt kê repos đang kết nối
+argocd repo list
+
+# Test connectivity
+argocd repo get https://gitlab.example.com/mygroup/myrepo.git
+```
+
+**Khắc phục:**
+```bash
+# Thêm repo với credentials
+argocd repo add https://gitlab.example.com/mygroup/myrepo.git \
+  --username git \
+  --password YOUR_PERSONAL_ACCESS_TOKEN
+
+# Dùng SSH key
+argocd repo add git@gitlab.example.com:mygroup/myrepo.git \
+  --ssh-private-key-path ~/.ssh/id_rsa
+```
+
+```yaml
+# Hoặc tạo Secret trong K8s
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitlab-repo-secret
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: repository
+stringData:
+  type: git
+  url: https://gitlab.example.com/mygroup/myrepo.git
+  username: oauth2
+  password: YOUR_PERSONAL_ACCESS_TOKEN
+```
+
+---
+
+### TS-ARGO-05 — Resource Already Exists (Ownership Conflict)
+
+**Triệu chứng:**
+```
+error: the server returned a conflict: Operation cannot be fulfilled on deployments.apps "my-app": 
+the object has been modified; please apply your changes to the latest version
+```
+
+**Nguyên nhân:**
+- Resource được tạo thủ công bằng `kubectl apply` trước đó, không có annotation của ArgoCD.
+
+**Khắc phục:**
+```bash
+# Cách 1: Force sync để ArgoCD overwrite
+argocd app sync my-app --force
+
+# Cách 2: Xóa resource để ArgoCD tạo lại
+kubectl delete deployment my-app -n production
+argocd app sync my-app
+
+# Cách 3: Thêm annotation để ArgoCD nhận ownership
+kubectl annotate deployment my-app \
+  argocd.argoproj.io/managed-by=my-argocd-app \
+  -n production
+```
+
+---
+
+## 3. Tầng Kubernetes — Production
+
+### TS-K8S-01 — ImagePullBackOff / ErrImagePull
+
+**Triệu chứng:**
+```
+Events:
+  Warning  Failed  kubelet  Failed to pull image "registry.example.com/app:abc1234": 
+  rpc error: code = Unknown desc = failed to pull and unpack image: 
+  unauthorized: authentication required
+```
+
+**Chẩn đoán:**
+```bash
+# Xem chi tiết pod
+kubectl describe pod <pod-name> -n production
+
+# Kiểm tra secret registry
+kubectl get secret regcred -n production -o yaml
+```
+
+**Khắc phục:**
+```bash
+# Tạo imagePullSecret
+kubectl create secret docker-registry regcred \
+  --docker-server=registry.example.com \
+  --docker-username=YOUR_USER \
+  --docker-password=YOUR_PASSWORD \
+  --docker-email=your@email.com \
+  -n production
+```
+
+```yaml
+# Thêm imagePullSecrets vào deployment
+spec:
+  template:
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: my-app
+          image: registry.example.com/app:abc1234
+```
+
+---
+
+### TS-K8S-02 — CrashLoopBackOff
+
+**Triệu chứng:**
+```
+NAME       READY   STATUS             RESTARTS   AGE
+my-app-0   0/1     CrashLoopBackOff   5          3m
+```
+
+**Chẩn đoán:**
+```bash
+# Xem log của container bị crash
+kubectl logs <pod-name> -n production --previous
+
+# Xem events
+kubectl describe pod <pod-name> -n production
+
+# Exec vào container debug (nếu pod chưa crash hoàn toàn)
+kubectl exec -it <pod-name> -n production -- /bin/sh
+```
+
+**Nguyên nhân phổ biến & khắc phục:**
+
+| Nguyên nhân | Dấu hiệu trong log | Khắc phục |
+|---|---|---|
+| Thiếu env variable | `env: variable not found` | Thêm `env` hoặc `envFrom` trong deployment |
+| Không connect được DB | `connection refused`, `timeout` | Kiểm tra DB service, NetworkPolicy |
+| Lỗi config file | `no such file or directory` | Kiểm tra ConfigMap mount |
+| Port bị chiếm | `address already in use` | Kiểm tra containerPort |
+| OOMKilled | `Killed` trong log | Tăng memory limit |
+
+```yaml
+# Cấu hình env từ ConfigMap và Secret
+spec:
+  containers:
+    - name: my-app
+      envFrom:
+        - configMapRef:
+            name: my-app-config
+        - secretRef:
+            name: my-app-secret
+```
+
+---
+
+### TS-K8S-03 — OOMKilled (Out of Memory)
+
+**Triệu chứng:**
+```
+kubectl describe pod <pod-name>
+  Last State:  Terminated
+    Reason: OOMKilled
+    Exit Code: 137
+```
+
+**Chẩn đoán:**
+```bash
+# Xem metrics memory hiện tại
+kubectl top pod -n production
+
+# Xem memory usage theo node
+kubectl top node
+```
+
+**Khắc phục:**
+```yaml
+# Tăng memory limit hợp lý
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "512Mi"    # Tăng lên từ giá trị cũ
+    cpu: "500m"
+```
+
+> **Nguyên tắc:** `limits` nên gấp 2x `requests`. Theo dõi qua Grafana/Prometheus rồi điều chỉnh.
+
+---
+
+### TS-K8S-04 — Pod Pending (Không Schedule Được)
+
+**Triệu chứng:**
+```
+NAME       READY   STATUS    RESTARTS   AGE
+my-app-0   0/1     Pending   0          10m
+```
+
+**Chẩn đoán:**
+```bash
+kubectl describe pod <pod-name> -n production
+# Phần Events sẽ cho biết lý do:
+# - Insufficient memory/cpu
+# - 0/3 nodes are available: 3 node(s) had taint...
+# - no persistent volumes available
+```
+
+**Nguyên nhân & Khắc phục:**
+
+```bash
+# Lỗi 1: Không đủ tài nguyên
+kubectl top node                    # Kiểm tra tài nguyên node
+kubectl describe node <node-name>   # Xem Allocatable vs Allocated
+# Khắc phục: Scale node hoặc giảm resource requests
+
+# Lỗi 2: Taint/Toleration không khớp
+kubectl describe node <node-name> | grep Taint
+# Khắc phục: Thêm toleration vào pod
+```
+
+```yaml
+# Thêm toleration nếu node có taint
+spec:
+  tolerations:
+    - key: "dedicated"
+      operator: "Equal"
+      value: "production"
+      effect: "NoSchedule"
+```
+
+```bash
+# Lỗi 3: PVC không bind được
+kubectl get pvc -n production
+kubectl describe pvc <pvc-name> -n production
+# Khắc phục: Kiểm tra StorageClass và tài nguyên storage
+```
+
+---
+
+### TS-K8S-05 — Readiness Probe Failed / Pod Not Ready
+
+**Triệu chứng:**
+```
+NAME       READY   STATUS    RESTARTS
+my-app-0   0/1     Running   0
+
+Events: Readiness probe failed: HTTP probe failed with statuscode: 503
+```
+
+**Chẩn đoán:**
+```bash
+# Test HTTP endpoint từ trong pod
+kubectl exec -it <pod-name> -n production -- curl -v http://localhost:8080/health
+
+# Xem cấu hình probe hiện tại
+kubectl get deployment my-app -n production -o yaml | grep -A 15 "readinessProbe"
+```
+
+**Khắc phục:**
+```yaml
+# Điều chỉnh probe cho ứng dụng khởi động chậm
+readinessProbe:
+  httpGet:
+    path: /actuator/health    # Đúng endpoint health
+    port: 8080
+  initialDelaySeconds: 30     # Chờ app khởi động xong
+  periodSeconds: 10
+  failureThreshold: 3
+  timeoutSeconds: 5
+
+livenessProbe:
+  httpGet:
+    path: /actuator/health/liveness
+    port: 8080
+  initialDelaySeconds: 60     # Liveness luôn delay lâu hơn readiness
+  periodSeconds: 15
+```
+
+---
+
+### TS-K8S-06 — Rolling Update Bị Stuck
+
+**Triệu chứng:**
+```
+kubectl rollout status deployment/my-app -n production
+Waiting for deployment "my-app" rollout to finish: 1 old replicas are pending termination...
+```
+
+**Chẩn đoán:**
+```bash
+# Xem trạng thái rollout
+kubectl rollout status deployment/my-app -n production
+
+# Xem lịch sử rollout
+kubectl rollout history deployment/my-app -n production
+```
+
+**Khắc phục:**
+```bash
+# Rollback về version trước
+kubectl rollout undo deployment/my-app -n production
+
+# Rollback về revision cụ thể
+kubectl rollout undo deployment/my-app --to-revision=3 -n production
+```
+
+```yaml
+# Cấu hình strategy rollout an toàn
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1           # Tối đa thêm 1 pod mới
+      maxUnavailable: 0     # Không được có pod nào unavailable (zero-downtime)
+  minReadySeconds: 10       # Chờ 10s sau khi pod Ready mới tiếp tục
+```
+
+---
+
+### TS-K8S-07 — Service Không Route Traffic / Connection Refused
+
+**Triệu chứng:**
+- Ingress trả về 502/503, hoặc curl đến Service không có response.
+
+**Chẩn đoán:**
+```bash
+# Kiểm tra endpoints (phải có IP pod)
+kubectl get endpoints my-service -n production
+# Nếu ENDPOINTS trống → label selector sai
+
+# Kiểm tra label của pod
+kubectl get pod --show-labels -n production
+
+# Kiểm tra label selector của service
+kubectl get service my-service -n production -o yaml | grep -A 5 selector
+```
+
+**Khắc phục:**
+```yaml
+# Đảm bảo label selector khớp với label của pod
+# Service
+spec:
+  selector:
+    app: my-app           # Phải khớp chính xác
+    version: "v2"
+
+# Deployment
+spec:
+  template:
+    metadata:
+      labels:
+        app: my-app       # Khớp
+        version: "v2"     # Khớp
+```
+
+---
+
+### TS-K8S-08 — ConfigMap / Secret Không Cập Nhật Sau Khi Sửa
+
+**Triệu chứng:**
+- Đã `kubectl apply` ConfigMap mới nhưng pod vẫn dùng config cũ.
+
+**Giải thích:**
+- Pod không tự restart khi ConfigMap thay đổi (trừ khi dùng volume mount có Subpath).
+
+**Khắc phục:**
+```bash
+# Restart deployment để load config mới
+kubectl rollout restart deployment/my-app -n production
+
+# Hoặc dùng annotation để trigger restart tự động khi ConfigMap thay đổi
+```
+
+```yaml
+# Thêm annotation checksum để tự động restart khi config thay đổi
+spec:
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+```
+
+---
+
+### TS-K8S-09 — PVC Không Mount Được / Pending
+
+**Triệu chứng:**
+```
+Events: Unable to mount volumes for pod: timeout expired waiting for volumes to attach/mount
+```
+
+**Chẩn đoán:**
+```bash
+kubectl get pvc -n production
+kubectl describe pvc my-pvc -n production
+
+# Kiểm tra StorageClass
+kubectl get storageclass
+```
+
+**Khắc phục:**
+```yaml
+# Đảm bảo StorageClass tồn tại và đúng tên
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: my-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard      # Phải khớp StorageClass có sẵn
+  resources:
+    requests:
+      storage: 10Gi
+```
+
+---
+
+### TS-K8S-10 — NetworkPolicy Chặn Traffic
+
+**Triệu chứng:**
+- Pod mới deploy không giao tiếp được với service khác, nhưng không có lỗi rõ ràng (chỉ timeout).
+
+**Chẩn đoán:**
+```bash
+# Kiểm tra NetworkPolicy tồn tại
+kubectl get networkpolicy -n production
+
+# Xem chi tiết policy
+kubectl describe networkpolicy <policy-name> -n production
+
+# Test kết nối từ pod này đến pod kia
+kubectl exec -it <source-pod> -n production -- \
+  curl -v http://<destination-service>:8080/health --max-time 5
+```
+
+**Khắc phục:**
+```yaml
+# Thêm rule cho phép ingress từ namespace hoặc pod cụ thể
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-my-app
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: my-database
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: my-app     # Chỉ cho phép my-app kết nối
+      ports:
+        - protocol: TCP
+          port: 5432
+```
+
+---
+
+## 4. Lỗi Liên Tầng
+
+### TS-E2E-01 — Race Condition: ArgoCD Sync Trước Khi Image Push Xong
+
+**Triệu chứng:**
+- Pipeline CI thành công, ArgoCD sync thành công, nhưng pods bị `ImagePullBackOff`.
+
+**Nguyên nhân:**
+- Job CI update tag image trong Git repo TRƯỚC KHI docker push hoàn tất.
+- ArgoCD sync ngay lập tức, K8s pull image nhưng chưa có trên registry.
+
+**Khắc phục:**
+```yaml
+# .gitlab-ci.yml — Đảm bảo push xong mới update manifest
+stages:
+  - build
+  - push
+  - update-manifest      # Stage riêng, chạy SAU KHI push xong
+
+build_push:
+  stage: push
+  script:
+    - docker build -t $IMAGE_NAME:$CI_COMMIT_SHORT_SHA .
+    - docker push $IMAGE_NAME:$CI_COMMIT_SHORT_SHA
+    # Chỉ sau khi push thành công mới chạy step tiếp theo
+
+update_manifest:
+  stage: update-manifest
+  script:
+    - sed -i "s|image:.*|image: $IMAGE_NAME:$CI_COMMIT_SHORT_SHA|g" k8s/deployment.yaml
+    - git commit -am "ci: update image to $CI_COMMIT_SHORT_SHA"
+    - git push
+```
+
+---
+
+### TS-E2E-02 — Config Drift (Ai Đó Apply Thủ Công)
+
+**Triệu chứng:**
+- ArgoCD báo `OutOfSync` nhưng không có commit mới nào trong Git.
+- Hành vi production khác với những gì trong Git.
+
+**Khắc phục:**
+```bash
+# Xem diff giữa live và desired state
+argocd app diff my-app
+
+# Bật self-heal để ArgoCD tự fix drift
+argocd app set my-app --self-heal
+```
+
+```yaml
+# Chính sách: KHÔNG cho phép kubectl apply thủ công vào production
+# Dùng RBAC K8s để giới hạn quyền
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: readonly-production
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]   # Chỉ đọc, không apply
+```
+
+---
+
+### TS-E2E-03 — Rollback Thất Bại Do Dùng Tag `latest`
+
+**Triệu chứng:**
+- `kubectl rollout undo` thành công nhưng app vẫn chạy version mới (tag `latest` đã bị overwrite).
+
+**Khắc phục:**
+```yaml
+# .gitlab-ci.yml — LUÔN dùng commit SHA làm image tag
+build:
+  script:
+    # BAD:
+    - docker build -t my-app:latest .
+    
+    # GOOD: dùng commit SHA để có thể rollback chính xác
+    - docker build -t my-app:$CI_COMMIT_SHORT_SHA .
+    - docker tag my-app:$CI_COMMIT_SHORT_SHA my-app:latest  # Tag latest thêm, không thay thế
+```
+
+---
+
+### TS-E2E-04 — Secret Không Đồng Bộ Giữa CI và K8s
+
+**Triệu chứng:**
+- App chạy bình thường trong CI (test pass), nhưng fail ở production do thiếu/sai secret.
+
+**Khắc phục — Dùng External Secrets Operator:**
+```yaml
+# ExternalSecret lấy secret từ Vault/AWS SSM/GCP Secret Manager
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: my-app-secret
+  namespace: production
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: my-app-secret     # Tên K8s Secret được tạo ra
+  data:
+    - secretKey: DB_PASSWORD
+      remoteRef:
+        key: production/my-app
+        property: db_password
+```
+
+---
+
+## 5. Công Cụ Chẩn Đoán Nhanh
+
+### Checklist Debug Khi Pipeline Fail
+
+```bash
+# ============================================================
+# BƯỚC 1: Xác định lỗi ở tầng nào
+# ============================================================
+# A. Kiểm tra GitLab CI pipeline
+#    → GitLab UI > CI/CD > Pipelines > Xem job log
+
+# B. Kiểm tra ArgoCD
+argocd app list
+argocd app get <app-name>
+
+# C. Kiểm tra K8s
+kubectl get pods -n production
+kubectl get events -n production --sort-by='.lastTimestamp'
+
+# ============================================================
+# BƯỚC 2: Drill-down chi tiết
+# ============================================================
+# Pod không chạy được
+kubectl describe pod <pod-name> -n production
+kubectl logs <pod-name> -n production --previous
+
+# Service không hoạt động
+kubectl get endpoints <service-name> -n production
+
+# Deployment không roll out
+kubectl rollout status deployment/<name> -n production
+```
+
+### Commands Hay Dùng
+
+```bash
+# Xem tất cả pods và trạng thái
+kubectl get pods -n production -o wide
+
+# Watch pods real-time
+kubectl get pods -n production -w
+
+# Xem log nhiều pod cùng lúc (dùng stern)
+stern my-app -n production
+
+# Debug bằng pod tạm thời
+kubectl run debug-pod --image=busybox -it --rm -n production -- /bin/sh
+
+# Xem toàn bộ resource trong namespace
+kubectl get all -n production
+
+# Export config của resource đang chạy
+kubectl get deployment my-app -n production -o yaml > current-deployment.yaml
+
+# So sánh intended vs actual
+argocd app diff my-app --exit-code=false
+```
+
+### Bảng Tóm Tắt Lỗi Nhanh
+
+| Code | Lỗi | Tầng | Lệnh chẩn đoán nhanh |
+|------|-----|------|----------------------|
+| TS-GL-01 | Runner offline | GitLab | `systemctl status gitlab-runner` |
+| TS-GL-02 | Docker build fail | GitLab | `docker build --no-cache .` |
+| TS-GL-03 | Push 401/403 | GitLab | `docker login $CI_REGISTRY` |
+| TS-GL-04 | Job timeout | GitLab | Xem log job, tăng timeout |
+| TS-ARGO-01 | OutOfSync stuck | ArgoCD | `argocd app diff my-app` |
+| TS-ARGO-02 | Helm/Kustomize error | ArgoCD | `helm template . -f values.yaml` |
+| TS-ARGO-03 | RBAC forbidden | ArgoCD | `kubectl auth can-i ...` |
+| TS-ARGO-04 | Repo không connect | ArgoCD | `argocd repo list` |
+| TS-K8S-01 | ImagePullBackOff | K8s | `kubectl describe pod` |
+| TS-K8S-02 | CrashLoopBackOff | K8s | `kubectl logs --previous` |
+| TS-K8S-03 | OOMKilled | K8s | `kubectl top pod` |
+| TS-K8S-04 | Pod Pending | K8s | `kubectl describe pod` (Events) |
+| TS-K8S-05 | Readiness probe fail | K8s | `curl localhost:PORT/health` |
+| TS-K8S-06 | Rollout stuck | K8s | `kubectl rollout undo` |
+| TS-K8S-07 | Service 502/503 | K8s | `kubectl get endpoints` |
+| TS-K8S-08 | Config không update | K8s | `kubectl rollout restart` |
+| TS-K8S-09 | PVC pending | K8s | `kubectl describe pvc` |
+| TS-K8S-10 | NetworkPolicy block | K8s | `kubectl get networkpolicy` |
+| TS-E2E-01 | Race condition | Liên tầng | Tách stage push vs update-manifest |
+| TS-E2E-02 | Config drift | Liên tầng | `argocd app set --self-heal` |
+| TS-E2E-03 | Rollback fail | Liên tầng | Dùng commit SHA thay `latest` |
+| TS-E2E-04 | Secret không sync | Liên tầng | Dùng External Secrets Operator |
+
+---
+
+*Tài liệu này được xây dựng cho pipeline: **GitLab Runner → ArgoCD → Kubernetes (Production)***
