@@ -1,0 +1,751 @@
+# HƯỚNG DẪN KUBERNETES: TRIỂN KHAI, QUẢN LÝ ROLLOUT & TRẠNG THÁI HỆ THỐNG THỰC TẾ
+
+Tài liệu này tổng hợp toàn diện các cú pháp triển khai, quản lý cập nhật ứng dụng (`rollout`), phân biệt các Controller (DaemonSet vs StatefulSet), và phân tích chi tiết các trạng thái thực tế của Node/Pod trong Kubernetes nhằm phục vụ vận hành và xử lý sự cố.
+
+**Phiên bản:** 2.0 | **Cập nhật:** 2026-10-17
+
+---
+
+## I. LỆNH TRIỂN KHAI FILE YAML THƯỜNG DÙNG (`kubectl apply`)
+
+Để áp dụng các file cấu hình `.yaml` / `.yml` lên cluster Kubernetes:
+
+### 1. Triển khai cả thư mục (Folder)
+* **Đang đứng tại thư mục chứa file:**
+  ```bash
+  kubectl apply -f .
+  ```
+* **Trỏ tới một thư mục cụ thể:**
+  ```bash
+  kubectl apply -f /path/to/folder/
+  ```
+
+### 2. Triển khai đệ quy (Bao gồm cả các thư mục con)
+Nếu cấu trúc thư mục chứa nhiều thư mục con bên trong, sử dụng cờ `-R` (hoặc `--recursive`):
+```bash
+kubectl apply -f . -R
+# Hoặc:
+kubectl apply -f /path/to/folder/ -R
+```
+
+### 3. Mẹo kiểm tra & dọn dẹp
+
+* **Chạy thử không áp dụng thật (Dry-run client — không gửi lên server):**
+  ```bash
+  kubectl apply -f . --dry-run=client
+  ```
+* **Dry-run phía server (chính xác hơn, kiểm tra cả admission webhook):**
+  ```bash
+  kubectl apply -f deployment.yaml --dry-run=server
+  ```
+* **Xem diff giữa manifest local và trạng thái đang chạy trước khi apply:**
+  ```bash
+  kubectl diff -f deployment.yaml
+  ```
+* **Xóa tất cả tài nguyên khai báo trong thư mục:**
+  ```bash
+  kubectl delete -f .
+  ```
+
+### 4. Các tùy chọn output hữu ích
+
+```bash
+# Xem resource sau khi apply (output dạng YAML)
+kubectl apply -f deployment.yaml -o yaml
+
+# Xem tên resource vừa được tạo/cập nhật
+kubectl apply -f . --output=name
+
+# Server-Side Apply (SSA) — khuyến nghị từ K8s 1.22+, tránh conflict field ownership
+kubectl apply -f deployment.yaml --server-side
+```
+
+> [!TIP]
+> **Phân biệt `kubectl apply` vs `kubectl create`:**
+> - `kubectl create`: Chỉ tạo mới — báo lỗi nếu resource đã tồn tại.
+> - `kubectl apply`: Tạo mới nếu chưa có, **cập nhật nếu đã có** — an toàn để dùng trong CI/CD pipeline.
+
+---
+
+## II. BẢNG TRẠNG THÁI CỦA NODE TRONG THỰC TẾ
+
+Khi kiểm tra danh sách Node (`kubectl get nodes`):
+
+| Trạng thái (Status) | Ý nghĩa kỹ thuật | Nguyên nhân thực tế |
+| :--- | :--- | :--- |
+| **Ready** | Node khỏe mạnh, sẵn sàng nhận Pod | Hệ thống hoạt động bình thường |
+| **Ready,SchedulingDisabled** | Node khỏe nhưng không nhận Pod mới / Đang bị Drain | Do quản trị viên đã chạy `kubectl cordon` hoặc `kubectl drain` để bảo trì |
+| **NotReady** | Node ngưng nhận Pod mới hoặc bị lỗi | - Dịch vụ `kubelet` bị chết/treo<br>- Mất kết nối mạng giữa Node và Master<br>- Node quá tải CPU/RAM dẫn đến treo HĐH |
+| **Unknown** | Master không nhận được heartbeat từ Node | - Node bị cúp điện/tắt đột ngột<br>- Mất kết nối mạng hạ tầng |
+
+**Lệnh chẩn đoán nhanh khi Node NotReady / Unknown:**
+```bash
+# Xem trạng thái tất cả node
+kubectl get nodes -o wide
+
+# Xem chi tiết điều kiện của node bị lỗi
+kubectl describe node <node-name>
+# → Kiểm tra phần "Conditions" và "Events" ở cuối output
+
+# SSH vào node để kiểm tra kubelet
+ssh <node-ip>
+sudo systemctl status kubelet
+sudo journalctl -u kubelet -n 50 --no-pager
+sudo systemctl restart kubelet   # Thử khởi động lại nếu kubelet chết
+```
+
+---
+
+### 💡 QUY TRÌNH BẢO TRÌ NODE: `CORDON` VS `DRAIN` VS `UNCORDON`
+
+Khi cần hạ Node xuống để nâng cấp OS, thay phần cứng hoặc sửa lỗi, Kubernetes cung cấp bộ lệnh quản lý trạng thái Node:
+
+1. **`kubectl cordon <node-name>` (Chặn Pod mới):**
+   * Đánh dấu Node sang trạng thái `SchedulingDisabled`.
+   * **Tác động:** Không cho Pod mới được tạo trên Node này, nhưng **vẫn giữ nguyên các Pod đang chạy** (không xóa hay di dời Pod nào).
+   * **Mẹo thao tác:**
+     ```bash
+     # Khóa nhiều Node cùng lúc bằng tên:
+     kubectl cordon node-1 node-2
+
+     # Hoặc khóa hàng loạt Node theo Label:
+     kubectl cordon -l environment=staging
+     ```
+
+2. **`kubectl drain <node-name>` (Dọn dẹp & Di dời Pod để bảo trì):**
+   * Thực hiện **Cordon** đồng thời **xóa (Evict)** toàn bộ các Pod đang chạy trên Node đó để Deployment/StatefulSet tự tái tạo Pod ở Node khác.
+   * **Các tham số thường dùng và bắt buộc trong thực tế:**
+     ```bash
+     kubectl drain <node-name> --ignore-daemonsets --delete-emptydir-data --force
+     ```
+     - `--ignore-daemonsets`: Bỏ qua các DaemonSet (như CNI, Fluentd, kube-proxy) vì DaemonSet luôn phải chạy trên mỗi Node.
+     - `--delete-emptydir-data`: Chấp nhận xóa các Pod có dùng `emptyDir` (dữ liệu tạm).
+     - `--force`: Ép di dời/xóa đối với các Pod độc lập (Standalone Pod) không do Controller (`Deployment`, `ReplicaSet`, `StatefulSet`) quản lý.
+
+   > [!NOTE]
+   > **Tại sao cần `--force` và bản chất khi bảo trì Node:**
+   > * **Tại sao K8s mặc định chặn:** Với Pod có Controller, K8s sẽ evict ở node này và Controller lập tức tạo Pod mới trên node khác — an toàn. Nhưng với **Standalone Pod** (không có Controller), nếu bị xóa thì **không ai tái tạo lại** → mất Pod vĩnh viễn. Vì vậy K8s yêu cầu `--force` như xác nhận "tôi chấp nhận mất các pod này".
+   > * **Thực tế khi bảo trì:** Dù không drain thì khi tắt Node để bảo trì, các Standalone Pod này đằng nào cũng sẽ bị lỗi/chết.
+   > * **Khuyến nghị trước khi drain:** Nên kiểm tra nhanh xem có Pod độc lập quan trọng nào đang chạy trên Node hay không:
+   >   ```bash
+   >   kubectl get pods -A --field-selector spec.nodeName=<node-name>
+   >   ```
+   > * Nếu có Pod quan trọng, hãy backup YAML hoặc chuyển sang quản lý bằng Deployment/StatefulSet trước khi thực hiện drain.
+
+3. **`kubectl uncordon <node-name>` (Mở lại Node):**
+   * Chuyển Node từ `Ready,SchedulingDisabled` trở lại `Ready`.
+   * Cho phép Scheduler tiếp tục phân bổ Pod mới lên Node sau khi đã bảo trì xong.
+   * **Lưu ý:** `uncordon` **không** tự động di chuyển Pod từ các Node khác về. Scheduler chỉ chọn Node này cho các Pod **mới được tạo** sau đó.
+
+---
+
+### ⚠️ Các tín hiệu cảnh báo tài nguyên Node
+
+Xem qua lệnh: `kubectl describe node <node-name>` → phần **Conditions**
+
+| Tín hiệu | Ý nghĩa | Lệnh chẩn đoán & Khắc phục |
+| :--- | :--- | :--- |
+| **MemoryPressure** | Node sắp/đã hết RAM, có nguy cơ Evict Pod | `free -m` trên node; tìm process ngốn RAM: `ps aux --sort=-%mem \| head -10` |
+| **DiskPressure** | Ổ đĩa sắp đầy, do log hoặc rác Docker/CRI | `df -h`; dọn: `docker system prune -f` hoặc `crictl rmi --prune` |
+| **PIDPressure** | Quá nhiều process đang chạy trên Node | `cat /proc/sys/kernel/pid_max`; tìm process nhiều nhất: `ps aux \| wc -l` |
+| **NetworkUnavailable** | CNI plugin gặp sự cố | Restart CNI pod: `kubectl delete pod -n kube-system -l k8s-app=calico-node` |
+
+---
+
+## III. PHA CHÍNH CỦA POD (POD PHASE)
+
+Xem phase hiện tại: `kubectl get pod <pod-name> -o jsonpath='{.status.phase}'`
+
+| Pha (Phase) | Mô tả | Lệnh xem chi tiết |
+| :--- | :--- | :--- |
+| **Pending** | Pod đã tạo trên API Server nhưng chưa được Scheduler gán vào Node hoặc đang chờ pull image/mount volume | `kubectl describe pod <name>` → xem **Events** |
+| **Running** | Pod đã được gán vào 1 Node, tất cả Container đã tạo, có ít nhất 1 Container đang chạy | `kubectl get pod <name> -o wide` → xem Node và IP |
+| **Succeeded** | Tất cả Container trong Pod đã hoàn thành và dừng với `exit code 0` (thường là Job/CronJob) | `kubectl logs <name>` → xem output kết quả |
+| **Failed** | Tất cả Container đã dừng, ít nhất 1 Container bị lỗi với `exit code != 0` | `kubectl logs <name> --previous` → xem stacktrace |
+| **Unknown** | Không lấy được trạng thái từ Node chứa Pod (thường do Node chuyển sang `NotReady`) | `kubectl describe pod <name>` → tìm `Node:` đang ở đâu |
+
+**Xem trạng thái container bên trong Pod (Container State):**
+```bash
+# Xem trạng thái chi tiết của từng container trong pod
+kubectl get pod <pod-name> -o jsonpath='{.status.containerStatuses[*].state}' | python3 -m json.tool
+
+# Xem tất cả pod và container state trong namespace
+kubectl get pods -n <namespace> -o custom-columns=\
+'NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready,RESTART:.status.containerStatuses[0].restartCount'
+```
+
+---
+
+## IV. CÁC TRẠNG THÁI LỖI THỰC TẾ THƯỜNG GẶP CỦA POD
+
+### 1. `CrashLoopBackOff`
+* **Hiện tượng:** Container khởi động → Chết (Crash) → K8s tự động restart → Tiếp tục crash → K8s tăng dần thời gian chờ restart (Backoff delay: 10s → 20s → 40s → 80s → max 5 phút).
+* **Nguyên nhân phổ biến:**
+  1. **Lỗi ứng dụng (Code bug):** Exception, NullPointer, Panic xảy ra ngay khi khởi động app.
+  2. **Thiếu biến môi trường / Cấu hình:** Không tìm thấy connection string DB, thiếu file config.
+  3. **Lỗi kết nối phụ thuộc:** Không kết nối được Database, Redis hay API bên ngoài lúc khởi tạo.
+  4. **Sai lệnh khởi động (`CMD`/`ENTRYPOINT`):** Lệnh thoát ngay sau khi chạy thay vì duy trì ở dạng foreground process.
+* **Chẩn đoán & Khắc phục:**
+  ```bash
+  # Bước 1: Xem log của lần crash trước đó
+  kubectl logs <pod-name> --previous
+
+  # Bước 2: Nếu pod không còn log (crash quá nhanh), describe để xem exit code
+  kubectl describe pod <pod-name>
+  # → Tìm "Last State: Terminated" và "Exit Code"
+  # Exit Code 1: App lỗi thông thường
+  # Exit Code 137: OOMKilled (bị kill do hết RAM)
+  # Exit Code 143: SIGTERM timeout
+
+  # Bước 3: Thêm sleep để giữ pod sống đủ lâu để debug
+  # Sửa tạm command trong deployment để giữ container sống
+  command: ["/bin/sh", "-c", "sleep 3600"]
+  # Sau đó exec vào kiểm tra
+  kubectl exec -it <pod-name> -- /bin/sh
+  ```
+
+---
+
+### 2. `ImagePullBackOff` / `ErrImagePull`
+* **Hiện tượng:** Không thể kéo (pull) Container Image từ Registry về Node.
+* **Nguyên nhân:**
+  * Sai tên Image hoặc Tag không tồn tại.
+  * Image nằm ở Private Registry nhưng chưa cấu hình `imagePullSecrets`.
+  * Node không có internet hoặc bị chặn kết nối đến Registry.
+* **Chẩn đoán & Khắc phục:**
+  ```bash
+  # Bước 1: Xem thông báo lỗi chi tiết
+  kubectl describe pod <pod-name>
+  # → Dòng "Failed to pull image": xem tên image và tag chính xác
+
+  # Bước 2: Test pull image thủ công trên node
+  ssh <node-ip>
+  docker pull registry.example.com/my-app:v1.0.0
+  # Nếu lỗi 401/403 → thiếu credentials
+
+  # Bước 3: Tạo Secret cho private registry
+  kubectl create secret docker-registry regcred \
+    --docker-server=registry.example.com \
+    --docker-username=YOUR_USER \
+    --docker-password=YOUR_PASSWORD \
+    -n <namespace>
+
+  # Bước 4: Thêm vào deployment spec
+  # spec.template.spec.imagePullSecrets:
+  #   - name: regcred
+  ```
+
+---
+
+### 3. `OOMKilled` (Out Of Memory Killed)
+* **Hiện tượng:** Container bị Kernel/OS tiêu diệt đột ngột, `kubectl describe pod` hiển thị `Exit Code: 137`.
+* **Nguyên nhân:**
+  * Container dùng RAM vượt quá mức `resources.limits.memory` khai báo.
+  * Ứng dụng bị rò rỉ bộ nhớ (Memory Leak).
+* **Chẩn đoán & Khắc phục:**
+  ```bash
+  # Xác nhận là OOMKilled
+  kubectl describe pod <pod-name> | grep -A5 "Last State"
+  # → "Reason: OOMKilled"
+
+  # Xem mức dùng memory thực tế
+  kubectl top pod <pod-name> -n <namespace>
+  kubectl top pod <pod-name> --containers   # Xem từng container
+
+  # Xem metrics theo thời gian (nếu có Prometheus/Grafana)
+  # Dashboard: container_memory_working_set_bytes
+  ```
+  ```yaml
+  # Tăng memory limit trong deployment
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"    # Tăng lên; giữ limits >= 2x requests
+      cpu: "500m"
+  ```
+
+---
+
+### 4. `Pending`
+* **Nguyên nhân & Chẩn đoán:**
+  ```bash
+  kubectl describe pod <pod-name>
+  # → Phần "Events" sẽ nói rõ lý do không schedule được
+  ```
+
+  | Thông báo trong Events | Nguyên nhân | Khắc phục |
+  | :--- | :--- | :--- |
+  | `Insufficient cpu/memory` | Node hết tài nguyên thỏa mãn `requests` | Scale cluster hoặc giảm `requests` |
+  | `0/3 nodes had taint...` | Không node nào khớp Taint/Toleration | Thêm `tolerations` vào pod spec |
+  | `didn't match node selector` | NodeSelector không có node phù hợp | Kiểm tra label node: `kubectl get node --show-labels` |
+  | `unbound immediate PVC` | PVC chưa bind được PV | Kiểm tra `kubectl get pvc,pv -n <ns>` và StorageClass |
+
+---
+
+### 5. `CreateContainerConfigError` / `CreateContainerError`
+* **Nguyên nhân:** Khai báo tham chiếu đến ConfigMap/Secret không tồn tại, hoặc lỗi mount volume/port conflict.
+* **Chẩn đoán:**
+  ```bash
+  kubectl describe pod <pod-name>
+  # → Events: "configmap 'my-config' not found" hoặc "secret 'my-secret' not found"
+
+  # Kiểm tra ConfigMap/Secret có tồn tại không
+  kubectl get configmap,secret -n <namespace>
+
+  # Tạo lại nếu thiếu
+  kubectl create configmap my-config --from-file=./config.properties -n <namespace>
+  ```
+
+---
+
+### 6. `Evicted` / `Terminating`
+
+**Evicted:**
+* **Nguyên nhân:** Node quá tải tài nguyên (MemoryPressure/DiskPressure), K8s chủ động đẩy Pod khỏi Node.
+* **Xử lý:**
+  ```bash
+  # Xem tất cả pod bị Evicted
+  kubectl get pods -A --field-selector=status.phase=Failed | grep Evicted
+
+  # Xóa sạch các pod Evicted (chúng không tự xóa)
+  kubectl get pods -A --field-selector=status.phase=Failed -o json | \
+    kubectl delete -f -
+  ```
+
+**Terminating bị treo:**
+* **Nguyên nhân:** Pod dừng mượt không thành công vì app không phản hồi tín hiệu `SIGTERM` trong `terminationGracePeriodSeconds` (mặc định 30 giây).
+* **Xử lý:**
+  ```bash
+  # Force delete pod bị treo Terminating
+  kubectl delete pod <pod-name> --grace-period=0 --force -n <namespace>
+  ```
+  ```yaml
+  # Tốt hơn: thêm lifecycle preStop hook để app có thời gian dọn dẹp
+  lifecycle:
+    preStop:
+      exec:
+        command: ["/bin/sh", "-c", "sleep 5"]
+  terminationGracePeriodSeconds: 60
+  ```
+
+---
+
+## V. QUY TRÌNH CHẨN ĐOÁN VÀ TROUBLESHOOTING CHUẨN
+
+Khi gặp sự cố với Pod hoặc Node, thực hiện theo thứ tự sau:
+
+```mermaid
+flowchart TD
+    A[Gặp sự cố Pod/Node] --> B[1. kubectl get pods - xác định trạng thái]
+    B --> C[2. kubectl describe - xem Events]
+    C --> D{Lỗi ở tầng nào?}
+    D -->|Image/Config| E[Fix manifest, Secret, ConfigMap]
+    D -->|App crash| F[3. kubectl logs / --previous]
+    D -->|Network| G[4. kubectl exec - test connectivity]
+    F --> H[Xác định nguyên nhân & Fix]
+    G --> H
+```
+
+### Bước 1 — Xem tổng quan trạng thái
+```bash
+# Xem tất cả pod, kèm node đang chạy
+kubectl get pods -n <namespace> -o wide
+
+# Xem events toàn namespace, sắp xếp theo thời gian
+kubectl get events -n <namespace> --sort-by='.lastTimestamp'
+
+# Xem events chỉ Warning
+kubectl get events -n <namespace> --field-selector type=Warning
+```
+
+### Bước 2 — Xem thông tin sự kiện (Events & Status)
+```bash
+kubectl describe pod <pod-name> -n <namespace>
+kubectl describe node <node-name>
+# → Luôn đọc phần "Events" và "Conditions" ở cuối output
+```
+
+### Bước 3 — Xem Log
+```bash
+# Log hiện tại
+kubectl logs <pod-name> -n <namespace>
+
+# Log của container cụ thể (nếu pod có nhiều container)
+kubectl logs <pod-name> -c <container-name> -n <namespace>
+
+# Log của lần crash trước đó (quan trọng với CrashLoopBackOff / OOMKilled)
+kubectl logs <pod-name> --previous -n <namespace>
+
+# Follow log realtime
+kubectl logs -f <pod-name> -n <namespace>
+
+# Log nhiều pod cùng lúc (dùng stern nếu đã cài)
+stern my-app -n <namespace>
+```
+
+### Bước 4 — Exec vào container để debug trực tiếp
+```bash
+# Exec vào container đang chạy
+kubectl exec -it <pod-name> -n <namespace> -- /bin/sh
+# Hoặc /bin/bash nếu image có bash
+
+# Exec thẳng 1 lệnh không cần shell interactive
+kubectl exec <pod-name> -- env                         # Xem biến môi trường
+kubectl exec <pod-name> -- cat /etc/config/app.conf   # Xem file config
+kubectl exec <pod-name> -- curl localhost:8080/health  # Test health endpoint nội bộ
+kubectl exec <pod-name> -- nslookup my-service        # Test DNS resolution
+```
+
+### Bước 5 — Port-forward để test từ máy local
+```bash
+# Forward port từ pod ra máy local để test
+kubectl port-forward pod/<pod-name> 8080:8080 -n <namespace>
+# → Truy cập http://localhost:8080 từ browser/curl local
+
+# Forward từ Service
+kubectl port-forward svc/<service-name> 8080:80 -n <namespace>
+```
+
+### Bước 6 — Tạo Debug Pod (khi container image không có shell/tools)
+```bash
+# Tạo pod debug tạm thời trong cùng namespace
+kubectl run debug-pod \
+  --image=busybox \
+  -it --rm \
+  -n <namespace> \
+  -- /bin/sh
+
+# Debug với image đầy đủ tool hơn
+kubectl run debug-pod \
+  --image=nicolaka/netshoot \
+  -it --rm \
+  -n <namespace> \
+  -- bash
+# → netshoot có sẵn: curl, dig, nslookup, tcpdump, ss, ping, traceroute...
+
+# Ephemeral debug container (K8s 1.23+, không cần xóa pod đang chạy)
+kubectl debug -it <pod-name> \
+  --image=nicolaka/netshoot \
+  --target=<container-name> \
+  -n <namespace>
+```
+
+---
+
+## VI. BỘ BA HẠ TẦNG HA & LOAD BALANCING: KEEPALIVED, HAPROXY, NGINX
+
+Trong hạ tầng thực tế (đặc biệt là Kubernetes Control Plane HA hoặc Web Cluster lớn), **Keepalived**, **HAProxy**, và **Nginx** đảm nhận 3 vai trò khác nhau bổ trợ cho nhau:
+
+### 1. Phân định vai trò chính
+
+| Công nghệ | Tầng OSI | Vai trò chính | Nhiệm vụ cụ thể |
+| :--- | :--- | :--- | :--- |
+| **Keepalived** | Layer 3/4 | **High Availability (HA)** | Quản lý **Virtual IP (VIP)** nối giữa 2+ node. Tự động chuyển VIP (Failover) nếu node chính bị sập hoặc dịch vụ chết. |
+| **HAProxy** | Layer 4/7 | **Load Balancer (TCP/HTTP)** | Cân bằng tải hiệu năng cao cho giao thức TCP (như K8s API Server `:6443`, DB MySQL/PostgreSQL) hoặc HTTP. |
+| **Nginx** | Layer 7 | **Web Server & Reverse Proxy** | Xử lý SSL/TLS Termination, điều hướng URL (Routing), Caching, Static Files, Ingress Controller cho Kubernetes. |
+
+---
+
+### 2. Sơ đồ phối hợp thực tế (High Availability Load Balancer)
+
+```text
+                  [ User / Client Traffic ]
+                             │
+                             ▼
+               [ Virtual IP (VIP): 192.168.1.100 ]
+                             │
+          ┌──────────────────┴──────────────────┐
+          │ (Keepalived VRRP Heartbeat)         │
+          ▼                                     ▼
+    ┌────────────┐                        ┌────────────┐
+    │ Node LB-01 │ (VRRP Master)          │ Node LB-02 │ (VRRP Backup)
+    │ Keepalived │                        │ Keepalived │
+    │    │       │                        │    │       │
+    │ HAProxy    │                        │ HAProxy    │
+    └─────┬──────┘                        └─────┬──────┘
+          │                                     │
+          └──────────────────┬──────────────────┘
+                             │ (Load Balanced TCP/HTTP)
+                             ▼
+         ┌───────────────────────────────────────┐
+         │ Backend Cluster (Nginx / App / K8s)   │
+         └───────────────────────────────────────┘
+```
+
+---
+
+### 3. Kịch bản ứng dụng trong Kubernetes & Hạ tầng
+
+1. **Kubernetes Control Plane High Availability (HA):**
+   - **Keepalived**: Quản lý VIP cho K8s Master Nodes (ví dụ: `10.0.0.100`).
+   - **HAProxy**: Nhận traffic từ VIP `10.0.0.100:6443` và cân bằng tải TCP đến 3 node K8s API Server (`master-1`, `master-2`, `master-3`).
+   - **Nginx Ingress Controller**: Chạy bên trong Cluster để phân luồng Layer 7 (Domain/Path) tới các Pod dịch vụ (`web-app`, `api-service`).
+
+2. **Mô hình Web Cluster truyền thống:**
+   - **Keepalived**: Giữ VIP luôn sống.
+   - **HAProxy**: Nhận kết nối và cân bằng tải traffic HTTP/HTTPS xuống dàn **Nginx Web Servers**.
+   - **Nginx**: Đọc code, xử lý PHP/NodeJS/Static Files, xử lý SSL Certificate.
+
+---
+
+## VII. QUẢN LÝ CẬP NHẬT ỨNG DỤNG KHÔNG DOWNTIME (`kubectl rollout`)
+
+`kubectl rollout` quản lý tiến trình cập nhật vòng đời của các tài nguyên `Deployments`, `StatefulSets`, và `DaemonSets`.
+
+### 1. Bảng tổng hợp các lệnh rollout cốt lõi
+
+| Lệnh | Mục đích | Ngữ cảnh ứng dụng thực tế |
+| :--- | :--- | :--- |
+| `kubectl rollout status <resource>/<name>` | Theo dõi tiến độ cập nhật realtime | Tích hợp trong pipeline CI/CD để đợi deploy xong |
+| `kubectl rollout history <resource>/<name>` | Xem danh sách các bản sửa đổi (revisions) | Rà soát lịch sử cập nhật trước khi rollback |
+| `kubectl rollout undo <resource>/<name>` | Hoàn tác về phiên bản trước | Cứu nguy khẩn cấp khi bản mới bị lỗi/crash |
+| `kubectl rollout restart <resource>/<name>` | Khởi động lại toàn bộ Pods dần dần | Reload ConfigMap, Secret mà không gây downtime |
+| `kubectl rollout pause` / `resume` | Tạm dừng / Tiếp tục rollout | Gom nhiều thay đổi cấu hình vào 1 lần cập nhật |
+
+### 2. Ví dụ câu lệnh chi tiết
+
+```bash
+# 1. Kiểm tra tiến trình hoàn tất triển khai (kèm timeout 2 phút)
+kubectl rollout status deployment/my-app --timeout=120s
+
+# 2. Xem lịch sử các revisions
+kubectl rollout history deployment/my-app
+
+# Xem chi tiết cấu hình Pod tại revision 2
+kubectl rollout history deployment/my-app --revision=2
+
+# 3. Rollback về phiên bản ngay trước đó
+kubectl rollout undo deployment/my-app
+
+# Rollback về revision cụ thể
+kubectl rollout undo deployment/my-app --to-revision=1
+
+# 4. Rolling restart không downtime
+kubectl rollout restart deployment/my-app
+
+# 5. Tạm dừng rollout để cập nhật nhiều thông số cùng lúc
+kubectl rollout pause deployment/my-app
+kubectl set image deployment/my-app web=my-app:v2.0.0
+kubectl set resources deployment/my-app -c=web --limits=cpu=500m,memory=512Mi
+kubectl rollout resume deployment/my-app
+```
+
+> [!TIP]
+> **Best Practice ghi chú lịch sử:** Để cột `CHANGE-CAUSE` trong `rollout history` hiển thị rõ nội dung thay đổi thay vì `<none>`, hãy thêm annotation:
+> ```bash
+> kubectl annotate deployment/my-app kubernetes.io/change-cause="Deploy v2.0.1 hotfix memory leak" --overwrite
+> ```
+
+### 3. Cấu hình Rolling Update Strategy (Zero-Downtime)
+
+```yaml
+# deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1         # Tạo thêm tối đa 1 pod mới trước khi xóa pod cũ
+      maxUnavailable: 0   # Không cho phép pod nào unavailable → zero-downtime
+  minReadySeconds: 10     # Chờ 10s sau khi pod Ready mới tiếp tục roll ra pod tiếp theo
+  revisionHistoryLimit: 5 # Giữ 5 revision để rollback (mặc định 10)
+  template:
+    spec:
+      containers:
+        - name: my-app
+          image: my-app:v2.0.0
+          # Readiness probe PHẢI được cấu hình để RollingUpdate hoạt động đúng
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          # Lifecycle hook để graceful shutdown
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+      terminationGracePeriodSeconds: 30
+```
+
+---
+
+## VIII. SO SÁNH CONTROLLER: DAEMONSET VS STATEFULSET (VÀ DEPLOYMENT)
+
+Trong Kubernetes, việc chọn đúng Controller quyết định kiến trúc dữ liệu, độ ổn định và cách scale của ứng dụng:
+
+### 1. Bảng so sánh chi tiết
+
+| Tiêu chí | **DaemonSet** | **StatefulSet** | **Deployment** (Đối chiếu) |
+| :--- | :--- | :--- | :--- |
+| **Mục đích chính** | Chạy service nền / agent quản trị trên **từng Node** | Chạy ứng dụng **có trạng thái (stateful)**, cần thứ tự và storage cố định | Chạy ứng dụng **không trạng thái (stateless)** |
+| **Số lượng & Phân bổ Pod** | **1 Pod / Node** (tự động theo số Worker Node, không có `replicas`) | Số lượng Pod do trường `replicas` quy định | Số lượng Pod do trường `replicas` quy định |
+| **Cơ chế Scaling** | Scale theo số lượng Node trong Cluster | Scale thủ công hoặc HPA qua `replicas` | Scale thủ công hoặc HPA qua `replicas` |
+| **Tên Pod & Định danh** | Ngẫu nhiên (vd: `fluentd-a1b2c`) | **Cố định có thứ tự** (vd: `mysql-0`, `mysql-1`, `mysql-2`) | Ngẫu nhiên (vd: `my-web-7b98fd-xyz`) |
+| **Định danh mạng (DNS)** | DNS chung qua Service | **DNS riêng cho từng Pod** thông qua **Headless Service** (`pod-0.svc...`) | DNS chung qua ClusterIP Service |
+| **Quản lý Lưu trữ (Storage)** | Thường dùng `hostPath` (mount thư mục Node như `/var/log`) | Tự động tạo PVC riêng cho từng Pod qua `volumeClaimTemplates` | Thường dùng PVC chia sẻ chung hoặc stateless |
+| **Thứ tự khởi tạo / xóa** | Khởi tạo song song trên các Node | Khởi tạo **tuần tự** `0 → 1 → 2`; Xóa tuần tự ngược lại `2 → 1 → 0` | Khởi tạo song song hoặc theo RollingUpdate |
+
+### 2. Kịch bản sử dụng trong thực tế
+
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                        KHI NÀO CHỌN CONTROLLER NÀO?                    │
+├───────────────────┬───────────────────────────────┬────────────────────┤
+│     DAEMONSET     │          STATEFULSET          │     DEPLOYMENT     │
+├───────────────────┼───────────────────────────────┼────────────────────┤
+│ • Log Collector   │ • Replicated Database         │ • Web Frontend     │
+│   (Fluentd, Loki) │   (MySQL, Postgres, MongoDB)  │   (React, Vue)     │
+│ • Node Exporter   │ • Message Broker phân tán     │ • REST / gRPC API  │
+│   (Prometheus)    │   (Kafka, ZooKeeper, RabbitMQ)│   (Node, Go, Java) │
+│ • Network CNI     │ • Distributed Search          │ • Background Worker│
+│   (Calico, Cilium)│   (Elasticsearch, Cassandra)  │   (Celery, Sidekiq)│
+└───────────────────┴───────────────────────────────┴────────────────────┘
+```
+
+### 3. YAML Mẫu Minh Họa
+
+#### 3a. DaemonSet — Thu thập log mỗi Node
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluentd
+  namespace: logging
+spec:
+  selector:
+    matchLabels:
+      app: fluentd
+  template:
+    metadata:
+      labels:
+        app: fluentd
+    spec:
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane  # Chạy cả trên master node
+          effect: NoSchedule
+      containers:
+        - name: fluentd
+          image: fluent/fluentd:v1.16
+          volumeMounts:
+            - name: varlog
+              mountPath: /var/log          # Mount thư mục log của HOST vào container
+      volumes:
+        - name: varlog
+          hostPath:
+            path: /var/log               # Lấy log trực tiếp từ Node
+```
+
+#### 3b. StatefulSet — Database với storage cố định
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  namespace: production
+spec:
+  serviceName: "mysql"    # Phải trỏ vào Headless Service (clusterIP: None)
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: root-password
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+  volumeClaimTemplates:          # Tự động tạo PVC riêng cho mysql-0, mysql-1, mysql-2
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: "fast-ssd"
+        resources:
+          requests:
+            storage: 50Gi
+---
+# Headless Service bắt buộc cho StatefulSet (clusterIP: None)
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: production
+spec:
+  clusterIP: None              # Headless — không có VIP, DNS trả về IP từng Pod
+  selector:
+    app: mysql
+  ports:
+    - port: 3306
+```
+
+#### 3c. Deployment — REST API stateless
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-api
+  namespace: production
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: my-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: my-api
+    spec:
+      containers:
+        - name: my-api
+          image: registry.example.com/my-api:v1.0.0
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: my-api-config
+            - secretRef:
+                name: my-api-secret
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+```
